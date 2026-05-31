@@ -32,6 +32,7 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [categoryError, setCategoryError] = useState('');
   const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
 
   useEffect(() => {
@@ -51,16 +52,29 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
 
   async function handleAddCategory() {
     if (!newCategoryName.trim()) return;
-    const { data } = await supabase
+    setCategoryError('');
+
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData.user) {
+      setCategoryError('Session expired. Please sign in again.');
+      return;
+    }
+
+    const { data, error } = await supabase
       .from('expense_categories')
       .insert({
         name: newCategoryName.trim(),
-        user_id: null,
+        user_id: userData.user.id,
         is_default: false,
         order: categories.length + 1,
       })
       .select()
       .maybeSingle();
+
+    if (error) {
+      setCategoryError(error.message);
+      return;
+    }
 
     if (data) {
       setCategories(prev => [...prev, data as ExpenseCategory]);
@@ -172,7 +186,10 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
                   type="text"
                   autoFocus
                   value={newCategoryName}
-                  onChange={e => setNewCategoryName(e.target.value)}
+                  onChange={e => {
+                    setNewCategoryName(e.target.value);
+                    if (categoryError) setCategoryError('');
+                  }}
                   onKeyDown={e => {
                     if (e.key === 'Enter') handleAddCategory();
                     if (e.key === 'Escape') setShowNewCategory(false);
@@ -189,7 +206,11 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setShowNewCategory(false); setNewCategoryName(''); }}
+                  onClick={() => {
+                    setShowNewCategory(false);
+                    setNewCategoryName('');
+                    setCategoryError('');
+                  }}
                   className="px-2 py-1.5 rounded-full bg-slate-200 text-slate-600 text-xs hover:bg-slate-300"
                 >
                   <X size={14} />
@@ -205,6 +226,7 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
               </button>
             )}
           </div>
+          {categoryError && <p className="text-xs text-red-500">{categoryError}</p>}
           {errors.category_id && <p className="text-xs text-red-500">{errors.category_id}</p>}
         </div>
 

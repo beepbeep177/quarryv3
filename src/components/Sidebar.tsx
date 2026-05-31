@@ -1,0 +1,184 @@
+import {
+  LayoutDashboard,
+  ClipboardList,
+  Users,
+  Truck,
+  FileBarChart2,
+  ChevronDown,
+  ChevronRight,
+  PlusCircle,
+  Eye,
+  BookUser,
+  ReceiptText,
+  ListTodo,
+  DollarSign,
+  Mountain,
+  Banknote,
+} from 'lucide-react';
+import { useState } from 'react';
+import type { NavSection } from '../types';
+
+interface SidebarProps {
+  activeSection: NavSection;
+  onNavigate: (section: NavSection) => void;
+}
+
+interface MenuItem {
+  id: NavSection;
+  label: string;
+  icon: React.ReactNode;
+  children?: { id: NavSection; label: string; icon: React.ReactNode }[];
+}
+
+const menuItems: MenuItem[] = [
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    icon: <LayoutDashboard size={18} />,
+  },
+  {
+    id: 'daily-add',
+    label: 'Daily Transactions',
+    icon: <ClipboardList size={18} />,
+    children: [
+      { id: 'daily-add', label: 'Add Entry', icon: <PlusCircle size={15} /> },
+      { id: 'daily-view', label: 'View Today', icon: <Eye size={15} /> },
+    ],
+  },
+  {
+    id: 'customers-list',
+    label: 'Customers',
+    icon: <Users size={18} />,
+    children: [
+      { id: 'customers-list', label: 'Masterlist', icon: <BookUser size={15} /> },
+      { id: 'customers-ar', label: 'Accounts Receivable', icon: <ReceiptText size={15} /> },
+    ],
+  },
+  {
+    id: 'logistics-trucks',
+    label: 'Logistics',
+    icon: <Truck size={18} />,
+    children: [
+      { id: 'logistics-trucks', label: 'Truck List', icon: <ListTodo size={15} /> },
+      { id: 'logistics-pricing', label: 'Pricing', icon: <DollarSign size={15} /> },
+    ],
+  },
+  {
+    id: 'expenses',
+    label: 'Expenses',
+    icon: <Banknote size={18} />,
+  },
+  {
+    id: 'reports',
+    label: 'Reports',
+    icon: <FileBarChart2 size={18} />,
+  },
+];
+
+export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
+  const getDefaultOpen = () => {
+    const map: Record<string, boolean> = {
+      'daily-add': true,
+      'daily-view': true,
+      'customers-list': true,
+      'customers-ar': true,
+      'logistics-trucks': true,
+      'logistics-pricing': true,
+    };
+    return map[activeSection] ? activeSection.startsWith('daily') ? 'daily-add' :
+      activeSection.startsWith('customers') ? 'customers-list' : 'logistics-trucks' : null;
+  };
+
+  const [openGroup, setOpenGroup] = useState<string | null>(getDefaultOpen);
+
+  const isGroupActive = (item: MenuItem) => {
+    if (!item.children) return activeSection === item.id;
+    return item.children.some(c => c.id === activeSection);
+  };
+
+  const toggleGroup = (id: string) => {
+    setOpenGroup(prev => (prev === id ? null : id));
+  };
+
+  return (
+    <aside className="w-64 min-h-screen bg-slate-950 flex flex-col">
+      {/* Logo */}
+      <div className="px-5 py-5 border-b border-slate-800 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-emerald-500 flex items-center justify-center flex-shrink-0">
+          <Mountain size={20} className="text-white" />
+        </div>
+        <div>
+          <p className="text-white font-bold text-sm leading-tight">QuarryPro</p>
+          <p className="text-slate-400 text-xs">Management System</p>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
+        {menuItems.map(item => {
+          const hasChildren = !!item.children;
+          const isOpen = openGroup === item.id;
+          const groupActive = isGroupActive(item);
+
+          if (!hasChildren) {
+            return (
+              <button
+                key={item.id}
+                onClick={() => onNavigate(item.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  activeSection === item.id
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <span className={activeSection === item.id ? 'text-emerald-400' : ''}>{item.icon}</span>
+                {item.label}
+              </button>
+            );
+          }
+
+          return (
+            <div key={item.id}>
+              <button
+                onClick={() => toggleGroup(item.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  groupActive
+                    ? 'text-emerald-400'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <span className={groupActive ? 'text-emerald-400' : ''}>{item.icon}</span>
+                <span className="flex-1 text-left">{item.label}</span>
+                {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+
+              {isOpen && (
+                <div className="ml-4 mt-0.5 space-y-0.5 pl-3 border-l border-slate-800">
+                  {item.children!.map(child => (
+                    <button
+                      key={child.id}
+                      onClick={() => onNavigate(child.id)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                        activeSection === child.id
+                          ? 'bg-emerald-500/15 text-emerald-400 font-medium'
+                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+                      }`}
+                    >
+                      {child.icon}
+                      {child.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="px-5 py-4 border-t border-slate-800">
+        <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 QuarryPro</p>
+      </div>
+    </aside>
+  );
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FileBarChart2,
   RefreshCw,
@@ -46,6 +46,27 @@ interface DateRangeSummary {
   end: string;
   label: string;
   salesGrouping: 'DAY' | 'MONTH';
+}
+
+interface QueryFailure {
+  message: string;
+}
+
+interface LooseQueryResult<T> {
+  data: T[] | null;
+  error: QueryFailure | null;
+}
+
+interface LooseQueryBuilder<T> extends PromiseLike<LooseQueryResult<T>> {
+  gte(column: string, value: string): LooseQueryBuilder<T>;
+  lte(column: string, value: string): LooseQueryBuilder<T>;
+  order(column: string, options: { ascending: boolean }): LooseQueryBuilder<T>;
+}
+
+interface LooseSupabaseClient {
+  from(table: string): {
+    select(columns: string): LooseQueryBuilder<ExpenseWithCategory>;
+  };
 }
 
 function fmt(v: number) {
@@ -222,15 +243,7 @@ export default function Reports() {
     return Array.from({ length: 8 }, (_, index) => String(current - index));
   }, [currentYear]);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
-    fetchReportData();
-  }, [range.start, range.end]);
-
-  async function fetchCustomers() {
+  const fetchCustomers = useCallback(async () => {
     setCustomerLoading(true);
     const { data } = await supabase
       .from('customers')
@@ -238,9 +251,9 @@ export default function Reports() {
       .order('name', { ascending: true });
     setCustomers((data ?? []) as Customer[]);
     setCustomerLoading(false);
-  }
+  }, []);
 
-  async function fetchReportData() {
+  const fetchReportData = useCallback(async () => {
     setLoading(true);
     setError('');
 
@@ -252,7 +265,7 @@ export default function Reports() {
         .lte('transaction_date', range.end)
         .order('transaction_date', { ascending: false })
         .order('created_at', { ascending: false }),
-      (supabase as any)
+      (supabase as unknown as LooseSupabaseClient)
         .from('expenses')
         .select('*, expense_categories(*)')
         .gte('expense_date', range.start)
@@ -268,7 +281,15 @@ export default function Reports() {
     setTransactions((transactionResult.data ?? []) as TransactionWithRelations[]);
     setExpenses((expenseResult.data ?? []) as ExpenseWithCategory[]);
     setLoading(false);
-  }
+  }, [range.end, range.start]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
+
+  useEffect(() => {
+    fetchReportData();
+  }, [fetchReportData]);
 
   const salesSummaryList = useMemo(() => {
     const bucketMap: Record<string, SalesSummary> = {};

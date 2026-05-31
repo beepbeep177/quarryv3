@@ -72,6 +72,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
 
   useEffect(() => {
@@ -127,6 +128,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     setSaving(true);
+    setSaveError(null);
 
     const payload = {
       transaction_date: form.transaction_date,
@@ -156,6 +158,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
         onSuccess();
         onClose();
       }, 900);
+    } else {
+      setSaveError(error.message || 'Failed to save. Please try again.');
     }
   }
 
@@ -367,6 +371,13 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
             <span className="text-slate-300 text-sm font-medium">Grand Total</span>
             <span className="text-2xl font-bold text-emerald-400">₱{fmt(totalAmount())}</span>
           </div>
+
+          {/* Save Error */}
+          {saveError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {saveError}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-3 pt-1">

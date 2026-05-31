@@ -35,7 +35,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', userId)
       .maybeSingle();
 
-    setProfile((data ?? null) as AppUser | null);
+    if (data) {
+      setProfile(data as AppUser);
+      return;
+    }
+
+    // Profile not found – user pre-dates the roles migration or trigger missed them.
+    // Auto-register via SECURITY DEFINER RPC (first caller becomes manager).
+    const { data: created } = await supabase.rpc('ensure_user_profile');
+    setProfile((created ?? null) as AppUser | null);
   }, []);
 
   useEffect(() => {

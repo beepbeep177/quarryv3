@@ -48,26 +48,6 @@ interface DateRangeSummary {
   salesGrouping: 'DAY' | 'MONTH';
 }
 
-interface QueryFailure {
-  message: string;
-}
-
-interface LooseQueryResult<T> {
-  data: T[] | null;
-  error: QueryFailure | null;
-}
-
-interface LooseQueryBuilder<T> extends PromiseLike<LooseQueryResult<T>> {
-  gte(column: string, value: string): LooseQueryBuilder<T>;
-  lte(column: string, value: string): LooseQueryBuilder<T>;
-  order(column: string, options: { ascending: boolean }): LooseQueryBuilder<T>;
-}
-
-interface LooseSupabaseClient {
-  from(table: string): {
-    select(columns: string): LooseQueryBuilder<ExpenseWithCategory>;
-  };
-}
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -265,7 +245,7 @@ export default function Reports() {
         .lte('transaction_date', range.end)
         .order('transaction_date', { ascending: false })
         .order('created_at', { ascending: false }),
-      (supabase as unknown as LooseSupabaseClient)
+      supabase
         .from('expenses')
         .select('*, expense_categories(*)')
         .gte('expense_date', range.start)
@@ -316,6 +296,7 @@ export default function Reports() {
   const grandVolume = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [transactions]);
   const cashTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'CASH').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const poTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'P.O').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
+  const offsetTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'OFFSET').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
 
   const customerTransactions = useMemo(() => {
     const filtered = customerId === 'ALL'
@@ -356,6 +337,7 @@ export default function Reports() {
 
   const customerTotalSales = useMemo(() => customerTransactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [customerTransactions]);
   const customerTotalVolume = useMemo(() => customerTransactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [customerTransactions]);
+  const customerCount = useMemo(() => new Set(customerTransactions.map(tx => tx.customer_id).filter(Boolean)).size, [customerTransactions]);
 
   const netIncomeList = useMemo(() => {
     const bucketKeys = createContinuousBuckets(range.start, range.end, netGrouping);
@@ -584,7 +566,7 @@ export default function Reports() {
                       <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">{formatVolume(grandVolume)}</td>
                       <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">₱{fmt(cashTotal)}</td>
                       <td className="px-4 py-3 text-right text-amber-400 font-semibold tabular-nums">₱{fmt(poTotal)}</td>
-                      <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(transactions.filter(tx => tx.payment_mode === 'OFFSET').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0))}</td>
+                      <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(offsetTotal)}</td>
                       <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandTotal)}</td>
                     </tr>
                   </tfoot>
@@ -601,7 +583,7 @@ export default function Reports() {
             {[
               { label: 'Sales Total', value: `₱${fmt(customerTotalSales)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'Volume Sold', value: `${formatVolume(customerTotalVolume)} m³`, icon: <Layers size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
-              { label: selectedCustomer ? 'Transactions' : 'Customers Reached', value: String(selectedCustomer ? customerTransactions.length : new Set(customerTransactions.map(tx => tx.customer_id)).size), icon: <Users size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
+              { label: selectedCustomer ? 'Transactions' : 'Customers Reached', value: String(selectedCustomer ? customerTransactions.length : customerCount), icon: <Users size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
             ].map(card => (
               <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>

@@ -255,7 +255,11 @@ export default function Reports() {
     ]);
 
     if (transactionResult.error || expenseResult.error) {
-      setError(transactionResult.error?.message || expenseResult.error?.message || 'Unable to load report data.');
+      const messages = [
+        transactionResult.error ? `Transactions: ${transactionResult.error.message}` : null,
+        expenseResult.error ? `Expenses: ${expenseResult.error.message}` : null,
+      ].filter(Boolean);
+      setError(messages.join(' • ') || 'Unable to load report data.');
     }
 
     setTransactions((transactionResult.data ?? []) as TransactionWithRelations[]);
@@ -329,11 +333,11 @@ export default function Reports() {
       bucketMap[bucketStart].count += 1;
       bucketMap[bucketStart].volume += tx.volume_m3 ?? 0;
       bucketMap[bucketStart].total += tx.total_amount ?? 0;
-      if (tx.customer_id) bucketMap[bucketStart].customerIds.add(tx.customer_id);
+      if (customerId === 'ALL' && tx.customer_id) bucketMap[bucketStart].customerIds.add(tx.customer_id);
     });
 
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
-  }, [customerTransactions, customerGrouping]);
+  }, [customerTransactions, customerGrouping, customerId]);
 
   const customerTotalSales = useMemo(() => customerTransactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [customerTransactions]);
   const customerTotalVolume = useMemo(() => customerTransactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [customerTransactions]);

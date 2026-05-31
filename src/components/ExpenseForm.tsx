@@ -44,9 +44,10 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
       .from('expense_categories')
       .select('*')
       .order('order', { ascending: true });
-    setCategories((data ?? []) as ExpenseCategory[]);
-    if (data && data.length > 0 && !form.category_id) {
-      setForm(f => ({ ...f, category_id: data[0].id }));
+    const categoriesData = (data ?? []) as ExpenseCategory[];
+    setCategories(categoriesData);
+    if (categoriesData.length > 0 && !form.category_id) {
+      setForm(f => ({ ...f, category_id: categoriesData[0].id }));
     }
   }
 
@@ -77,8 +78,9 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
     }
 
     if (data) {
-      setCategories(prev => [...prev, data as ExpenseCategory]);
-      setForm(f => ({ ...f, category_id: data.id }));
+      const insertedCategory = data as ExpenseCategory;
+      setCategories(prev => [...prev, insertedCategory]);
+      setForm(f => ({ ...f, category_id: insertedCategory.id }));
       setNewCategoryName('');
       setShowNewCategory(false);
     }

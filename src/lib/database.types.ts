@@ -1,147 +1,282 @@
-export interface Database {
-  public: {
-    Tables: {
-      app_users: {
-        Row: AppUser;
-        Insert: Pick<AppUser, 'id' | 'email'> & Partial<Pick<AppUser, 'role' | 'created_at' | 'updated_at'>>;
-        Update: Partial<Omit<AppUser, 'id' | 'created_at'>>;
-      };
-      audit_logs: {
-        Row: AuditLog;
-        Insert: Omit<AuditLog, 'id' | 'created_at'>;
-        Update: Partial<Omit<AuditLog, 'id' | 'created_at'>>;
-      };
-      customers: {
-        Row: Customer;
-        Insert: Omit<Customer, 'id' | 'created_at'>;
-        Update: Partial<Omit<Customer, 'id' | 'created_at'>>;
-      };
-      trucks: {
-        Row: Truck;
-        Insert: Omit<Truck, 'id' | 'created_at'>;
-        Update: Partial<Omit<Truck, 'id' | 'created_at'>>;
-      };
-      pricing: {
-        Row: Pricing;
-        Insert: Omit<Pricing, 'id' | 'created_at'>;
-        Update: Partial<Omit<Pricing, 'id' | 'created_at'>>;
-      };
-      transactions: {
-        Row: Transaction;
-        Insert: Omit<Transaction, 'id' | 'created_at' | 'volume_m3' | 'amount' | 'total_amount'>;
-        Update: Partial<Omit<Transaction, 'id' | 'created_at' | 'volume_m3' | 'amount' | 'total_amount'>>;
-      };
-      expense_categories: {
-        Row: ExpenseCategory;
-        Insert: Omit<ExpenseCategory, 'id' | 'created_at'>;
-        Update: Partial<Omit<ExpenseCategory, 'id' | 'created_at'>>;
-      };
-      expenses: {
-        Row: Expense;
-        Insert: Omit<Expense, 'id' | 'created_at'>;
-        Update: Partial<Omit<Expense, 'id' | 'created_at'>>;
-      };
-    };
-  };
-}
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-
-export interface AppUser {
-  id: string;
-  email: string;
-  role: UserRole;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AuditLog {
-  id: string;
-  table_name: string;
-  record_id: string | null;
-  action: AuditAction;
-  actor_user_id: string | null;
-  actor_email: string | null;
-  old_data: Record<string, unknown> | null;
-  new_data: Record<string, unknown> | null;
-  created_at: string;
-}
-
-export interface Customer {
-  id: string;
-  name: string;
-  contact: string;
-  address: string;
-  created_at: string;
-}
-
-export interface Truck {
-  id: string;
-  plate_number: string;
-  driver_name: string;
-  capacity_m3: number;
-  created_at: string;
-}
-
-export interface Pricing {
-  id: string;
-  material_type: string;
-  unit_price: number;
-  effective_date: string;
-  created_at: string;
-}
-
 export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET';
 export type TransactionStatus = 'PENDING' | 'PAID';
 
-export interface Transaction {
-  id: string;
-  transaction_date: string;
-  customer_id: string;
-  truck_id: string;
-  dr_number: string;
-  length_cm: number;
-  width_cm: number;
-  height_cm: number;
-  volume_m3: number;
-  unit_price: number;
-  amount: number;
-  dr_capitol: number;
-  passway: number;
-  kulot: number;
-  total_amount: number;
-  payment_mode: PaymentMode;
-  status: TransactionStatus;
-  notes: string;
-  created_at: string;
-}
+export type Database = {
+  public: {
+    Tables: {
+      app_users: {
+        Row: {
+          id: string;
+          email: string;
+          role: UserRole;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id: string;
+          email: string;
+          role?: UserRole;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          email?: string;
+          role?: UserRole;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      audit_logs: {
+        Row: {
+          id: string;
+          table_name: string;
+          record_id: string | null;
+          action: AuditAction;
+          actor_user_id: string | null;
+          actor_email: string | null;
+          old_data: Json | null;
+          new_data: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          table_name: string;
+          record_id?: string | null;
+          action: AuditAction;
+          actor_user_id?: string | null;
+          actor_email?: string | null;
+          old_data?: Json | null;
+          new_data?: Json | null;
+        };
+        Update: {
+          table_name?: string;
+          record_id?: string | null;
+          action?: AuditAction;
+          actor_user_id?: string | null;
+          actor_email?: string | null;
+          old_data?: Json | null;
+          new_data?: Json | null;
+        };
+        Relationships: [];
+      };
+      customers: {
+        Row: {
+          id: string;
+          name: string;
+          contact: string;
+          address: string;
+          created_at: string;
+        };
+        Insert: {
+          name: string;
+          contact?: string;
+          address?: string;
+        };
+        Update: {
+          name?: string;
+          contact?: string;
+          address?: string;
+        };
+        Relationships: [];
+      };
+      trucks: {
+        Row: {
+          id: string;
+          plate_number: string;
+          driver_name: string;
+          capacity_m3: number;
+          created_at: string;
+        };
+        Insert: {
+          plate_number: string;
+          driver_name?: string;
+          capacity_m3?: number;
+        };
+        Update: {
+          plate_number?: string;
+          driver_name?: string;
+          capacity_m3?: number;
+        };
+        Relationships: [];
+      };
+      pricing: {
+        Row: {
+          id: string;
+          material_type: string;
+          unit_price: number;
+          effective_date: string;
+          created_at: string;
+        };
+        Insert: {
+          material_type: string;
+          unit_price?: number;
+          effective_date?: string;
+        };
+        Update: {
+          material_type?: string;
+          unit_price?: number;
+          effective_date?: string;
+        };
+        Relationships: [];
+      };
+      transactions: {
+        Row: {
+          id: string;
+          transaction_date: string;
+          customer_id: string;
+          truck_id: string;
+          dr_number: string;
+          length_cm: number;
+          width_cm: number;
+          height_cm: number;
+          volume_m3: number;
+          unit_price: number;
+          amount: number;
+          dr_capitol: number;
+          passway: number;
+          kulot: number;
+          total_amount: number;
+          payment_mode: PaymentMode;
+          status: TransactionStatus;
+          notes: string;
+          created_at: string;
+        };
+        Insert: {
+          transaction_date?: string;
+          customer_id: string;
+          truck_id: string;
+          dr_number?: string;
+          length_cm?: number;
+          width_cm?: number;
+          height_cm?: number;
+          unit_price?: number;
+          dr_capitol?: number;
+          passway?: number;
+          kulot?: number;
+          payment_mode?: PaymentMode;
+          status?: TransactionStatus;
+          notes?: string;
+        };
+        Update: {
+          transaction_date?: string;
+          customer_id?: string;
+          truck_id?: string;
+          dr_number?: string;
+          length_cm?: number;
+          width_cm?: number;
+          height_cm?: number;
+          unit_price?: number;
+          dr_capitol?: number;
+          passway?: number;
+          kulot?: number;
+          payment_mode?: PaymentMode;
+          status?: TransactionStatus;
+          notes?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'transactions_customer_id_fkey';
+            columns: ['customer_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'transactions_truck_id_fkey';
+            columns: ['truck_id'];
+            referencedRelation: 'trucks';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      expense_categories: {
+        Row: {
+          id: string;
+          name: string;
+          user_id: string | null;
+          is_default: boolean;
+          order: number;
+          created_at: string;
+        };
+        Insert: {
+          name: string;
+          user_id?: string | null;
+          is_default?: boolean;
+          order?: number;
+        };
+        Update: {
+          name?: string;
+          user_id?: string | null;
+          is_default?: boolean;
+          order?: number;
+        };
+        Relationships: [];
+      };
+      expenses: {
+        Row: {
+          id: string;
+          expense_date: string;
+          category_id: string;
+          amount: number;
+          payee_supplier: string;
+          description: string;
+          liters_counter: number | null;
+          created_at: string;
+        };
+        Insert: {
+          expense_date?: string;
+          category_id?: string;
+          amount?: number;
+          payee_supplier?: string;
+          description?: string;
+          liters_counter?: number | null;
+        };
+        Update: {
+          expense_date?: string;
+          category_id?: string;
+          amount?: number;
+          payee_supplier?: string;
+          description?: string;
+          liters_counter?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'expenses_category_id_fkey';
+            columns: ['category_id'];
+            referencedRelation: 'expense_categories';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+};
 
-export interface TransactionWithRelations extends Transaction {
+export type AppUser = Database['public']['Tables']['app_users']['Row'];
+export type AuditLogRow = Database['public']['Tables']['audit_logs']['Row'];
+export type Customer = Database['public']['Tables']['customers']['Row'];
+export type Truck = Database['public']['Tables']['trucks']['Row'];
+export type Pricing = Database['public']['Tables']['pricing']['Row'];
+export type Transaction = Database['public']['Tables']['transactions']['Row'];
+export type ExpenseCategory = Database['public']['Tables']['expense_categories']['Row'];
+export type Expense = Database['public']['Tables']['expenses']['Row'];
+
+export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
+  old_data: Record<string, unknown> | null;
+  new_data: Record<string, unknown> | null;
+};
+
+export type TransactionWithRelations = Transaction & {
   customers: Customer | null;
   trucks: Truck | null;
-}
+};
 
-export interface ExpenseCategory {
-  id: string;
-  name: string;
-  user_id: string | null;
-  is_default: boolean;
-  order: number;
-  created_at: string;
-}
-
-export interface Expense {
-  id: string;
-  expense_date: string;
-  category_id: string;
-  amount: number;
-  payee_supplier: string;
-  description: string;
-  liters_counter: number | null;
-  created_at: string;
-}
-
-export interface ExpenseWithCategory extends Expense {
+export type ExpenseWithCategory = Expense & {
   expense_categories: ExpenseCategory | null;
-}
+};

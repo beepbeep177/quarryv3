@@ -80,11 +80,16 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       supabase.from('trucks').select('*').order('plate_number'),
       supabase.from('pricing').select('*').order('material_type'),
     ]).then(([c, t, p]) => {
-      setCustomers((c.data ?? []) as Customer[]);
-      setTrucks((t.data ?? []) as Truck[]);
-      setPricingList((p.data ?? []) as Pricing[]);
-      if (!isEditing && p.data && p.data.length > 0) {
-        setForm(f => ({ ...f, unit_price: String(p.data[0].unit_price) }));
+      const customersData = (c.data ?? []) as Customer[];
+      const trucksData = (t.data ?? []) as Truck[];
+      const pricingData = (p.data ?? []) as Pricing[];
+
+      setCustomers(customersData);
+      setTrucks(trucksData);
+      setPricingList(pricingData);
+
+      if (!isEditing && pricingData.length > 0) {
+        setForm(f => ({ ...f, unit_price: String(pricingData[0].unit_price) }));
       }
     });
   }, [isEditing]);

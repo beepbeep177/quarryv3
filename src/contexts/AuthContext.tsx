@@ -42,8 +42,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Profile not found – user pre-dates the roles migration or trigger missed them.
     // Auto-register via SECURITY DEFINER RPC (first caller becomes manager).
-    const { data: created } = await supabase.rpc('ensure_user_profile');
-    setProfile((created ?? null) as AppUser | null);
+    const { data: created, error: rpcError } = await supabase.rpc('ensure_user_profile');
+    if (!rpcError) {
+      setProfile((created ?? null) as AppUser | null);
+    } else {
+      console.error('ensure_user_profile RPC failed:', rpcError.message);
+      setProfile(null);
+    }
   }, []);
 
   useEffect(() => {

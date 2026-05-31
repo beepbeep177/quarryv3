@@ -56,6 +56,10 @@ BEGIN
   -- Fetch email from auth schema (accessible because SECURITY DEFINER)
   SELECT email INTO _email FROM auth.users WHERE id = _uid;
 
+  -- Serialize manager promotion to avoid a TOCTOU race when multiple users
+  -- hit this function simultaneously during initial setup.
+  PERFORM pg_advisory_xact_lock(hashtext('ensure_user_profile_manager_lock'));
+
   -- First caller with no existing manager becomes manager
   IF NOT EXISTS (SELECT 1 FROM public.app_users WHERE role = 'manager') THEN
     _role := 'manager';

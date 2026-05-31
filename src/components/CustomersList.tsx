@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { UserPlus, Search, RefreshCw, Users, Building2, Phone, MapPin, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer } from '../lib/database.types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
-export default function CustomersList() {
+export default function CustomersList({ readOnly = false }: { readOnly?: boolean }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -90,17 +91,20 @@ export default function CustomersList() {
           <h1 className="text-2xl font-bold text-slate-800">Customers</h1>
           <p className="text-slate-500 text-sm mt-0.5">{customers.length} registered customer{customers.length !== 1 ? 's' : ''}</p>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
-        >
-          <UserPlus size={16} />
-          Add Customer
-        </button>
+        {!readOnly && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
+          >
+            <UserPlus size={16} />
+            Add Customer
+          </button>
+        )}
       </div>
 
-      {/* Add Customer Form */}
-      {showForm && (
+      {readOnly && <ReadOnlyNotice message="Operators can search and review customer records, but only managers can maintain them." />}
+
+      {showForm && !readOnly && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Customer</h2>
@@ -139,13 +143,11 @@ export default function CustomersList() {
         </div>
       )}
 
-      {/* Search */}
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
         <input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
       </div>
 
-      {/* List */}
       {loading ? (
         <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
           <RefreshCw size={16} className="animate-spin" /> Loading...
@@ -160,7 +162,6 @@ export default function CustomersList() {
           {filtered.map(c => (
             <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-shadow group">
               {editingCustomer?.id === c.id ? (
-                /* Inline Edit Form */
                 <form onSubmit={handleEditSubmit} className="space-y-3">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Edit Customer</p>
@@ -193,7 +194,6 @@ export default function CustomersList() {
                   </div>
                 </form>
               ) : (
-                /* Card View */
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
                     <Building2 size={18} className="text-emerald-600" />
@@ -213,23 +213,25 @@ export default function CustomersList() {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <button
-                      onClick={() => startEdit(c)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                      title="Edit"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(c.id)}
-                      disabled={deletingId === c.id}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
-                      title="Delete"
-                    >
-                      {deletingId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                    </button>
-                  </div>
+                  {!readOnly && (
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      <button
+                        onClick={() => startEdit(c)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                        title="Edit"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(c.id)}
+                        disabled={deletingId === c.id}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                        title="Delete"
+                      >
+                        {deletingId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

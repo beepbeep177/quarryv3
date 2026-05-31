@@ -1,6 +1,16 @@
 export interface Database {
   public: {
     Tables: {
+      app_users: {
+        Row: AppUser;
+        Insert: Pick<AppUser, 'id' | 'email'> & Partial<Pick<AppUser, 'role' | 'created_at' | 'updated_at'>>;
+        Update: Partial<Omit<AppUser, 'id' | 'created_at'>>;
+      };
+      audit_logs: {
+        Row: AuditLog;
+        Insert: Omit<AuditLog, 'id' | 'created_at'>;
+        Update: Partial<Omit<AuditLog, 'id' | 'created_at'>>;
+      };
       customers: {
         Row: Customer;
         Insert: Omit<Customer, 'id' | 'created_at'>;
@@ -33,6 +43,29 @@ export interface Database {
       };
     };
   };
+}
+
+export type UserRole = 'manager' | 'operator';
+export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
+
+export interface AppUser {
+  id: string;
+  email: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditLog {
+  id: string;
+  table_name: string;
+  record_id: string | null;
+  action: AuditAction;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  old_data: Record<string, unknown> | null;
+  new_data: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface Customer {

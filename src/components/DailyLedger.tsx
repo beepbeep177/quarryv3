@@ -10,11 +10,13 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
 interface DailyLedgerProps {
   onAddEntry: () => void;
   onEditEntry: (tx: TransactionWithRelations) => void;
   refreshKey: number;
+  readOnly: boolean;
 }
 
 const today = new Date().toISOString().split('T')[0];
@@ -23,7 +25,7 @@ function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: DailyLedgerProps) {
+export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readOnly }: DailyLedgerProps) {
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -79,16 +81,19 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
             {new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
-        <button
-          onClick={onAddEntry}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
-        >
-          <PlusCircle size={16} />
-          Add Entry
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onAddEntry}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
+          >
+            <PlusCircle size={16} />
+            Add Entry
+          </button>
+        )}
       </div>
 
-      {/* Filters */}
+      {readOnly && <ReadOnlyNotice message="Operators can review daily transactions, but only managers can add, edit, or delete them." />}
+
       <div className="flex gap-3 items-center flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -124,7 +129,6 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
         </button>
       </div>
 
-      {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
@@ -134,9 +138,11 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
           <div className="py-16 text-center">
             <Layers size={32} className="text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm font-medium">No transactions found</p>
-            <button onClick={onAddEntry} className="mt-3 text-sm text-emerald-600 font-medium hover:text-emerald-700">
-              Add first entry
-            </button>
+            {!readOnly && (
+              <button onClick={onAddEntry} className="mt-3 text-sm text-emerald-600 font-medium hover:text-emerald-700">
+                Add first entry
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -156,7 +162,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
                     <th className="px-4 py-3 text-right">Total</th>
                     <th className="px-4 py-3 text-center">Mode</th>
                     <th className="px-4 py-3 text-center">Status</th>
-                    <th className="px-4 py-3"></th>
+                    {!readOnly && <th className="px-4 py-3"></th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -182,23 +188,25 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
                         <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(tx.total_amount)}</td>
                         <td className="px-4 py-3 text-center"><PaymentBadge mode={tx.payment_mode} /></td>
                         <td className="px-4 py-3 text-center"><StatusBadge status={tx.status} /></td>
-                        <td className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                            <button
-                              onClick={() => onEditEntry(tx)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(tx.id)}
-                              disabled={deletingId === tx.id}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </td>
+                        {!readOnly && (
+                          <td className="px-4 py-3 text-center">
+                            <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                              <button
+                                onClick={() => onEditEntry(tx)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(tx.id)}
+                                disabled={deletingId === tx.id}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -206,7 +214,6 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: Dai
               </table>
             </div>
 
-            {/* Totals Row */}
             <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-sm">
               <span className="text-slate-400 font-medium">{filtered.length} entries</span>
               <div className="flex items-center gap-8">

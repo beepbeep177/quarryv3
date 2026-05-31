@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Truck, PlusCircle, Search, RefreshCw, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Truck as TruckType } from '../lib/database.types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
-export default function TruckList() {
+export default function TruckList({ readOnly = false }: { readOnly?: boolean }) {
   const [trucks, setTrucks] = useState<TruckType[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -98,13 +99,17 @@ export default function TruckList() {
           <h1 className="text-2xl font-bold text-slate-800">Truck List</h1>
           <p className="text-slate-500 text-sm mt-0.5">{trucks.length} registered truck{trucks.length !== 1 ? 's' : ''}</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
-          <PlusCircle size={16} />
-          Add Truck
-        </button>
+        {!readOnly && (
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
+            <PlusCircle size={16} />
+            Add Truck
+          </button>
+        )}
       </div>
 
-      {showForm && (
+      {readOnly && <ReadOnlyNotice message="Operators can review truck details, but only managers can add, edit, or delete trucks." />}
+
+      {showForm && !readOnly && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Truck</h2>
@@ -153,20 +158,19 @@ export default function TruckList() {
                 <th className="px-4 py-3 text-left">Plate Number</th>
                 <th className="px-4 py-3 text-left">Driver</th>
                 <th className="px-4 py-3 text-right">Capacity (m³)</th>
-                <th className="px-4 py-3 text-center w-20">Actions</th>
+                {!readOnly && <th className="px-4 py-3 text-center w-20">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={readOnly ? 4 : 5} className="px-4 py-12 text-center text-slate-400">
                     <Truck size={28} className="mx-auto mb-2 text-slate-300" />
                     No trucks found
                   </td>
                 </tr>
               ) : filtered.map((t, i) => (
                 editingTruck?.id === t.id ? (
-                  /* Inline Edit Row */
                   <tr key={t.id} className="bg-blue-50/50">
                     <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
                     <td className="px-4 py-2" colSpan={4}>
@@ -196,22 +200,23 @@ export default function TruckList() {
                     </td>
                   </tr>
                 ) : (
-                  /* Normal Row */
                   <tr key={t.id} className="hover:bg-slate-50 transition-colors group">
                     <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
                     <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
                     <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${t.capacity_m3} m³` : '—'}</td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => startEdit(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
-                          <Pencil size={14} />
-                        </button>
-                        <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
-                          {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                        </button>
-                      </div>
-                    </td>
+                    {!readOnly && (
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => startEdit(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
+                            <Pencil size={14} />
+                          </button>
+                          <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                            {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 )
               ))}

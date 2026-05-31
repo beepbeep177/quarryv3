@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { DollarSign, PlusCircle, RefreshCw, X, Loader2, Tag, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Pricing } from '../lib/database.types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function PricingList() {
+export default function PricingList({ readOnly = false }: { readOnly?: boolean }) {
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -103,13 +104,17 @@ export default function PricingList() {
           <h1 className="text-2xl font-bold text-slate-800">Pricing</h1>
           <p className="text-slate-500 text-sm mt-0.5">Material price list per m³</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
-          <PlusCircle size={16} />
-          Add Pricing
-        </button>
+        {!readOnly && (
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
+            <PlusCircle size={16} />
+            Add Pricing
+          </button>
+        )}
       </div>
 
-      {showForm && (
+      {readOnly && <ReadOnlyNotice message="Operators can review pricing, but only managers can maintain price entries." />}
+
+      {showForm && !readOnly && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Price Entry</h2>
@@ -155,7 +160,6 @@ export default function PricingList() {
           ) : pricingList.map(p => (
             <div key={p.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow group">
               {editingPricing?.id === p.id ? (
-                /* Inline Edit Form */
                 <form onSubmit={handleEditSubmit} className="space-y-3">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Edit Price</p>
@@ -183,7 +187,6 @@ export default function PricingList() {
                   </div>
                 </form>
               ) : (
-                /* Card View */
                 <>
                   <div className="flex items-start justify-between mb-3">
                     <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
@@ -193,14 +196,16 @@ export default function PricingList() {
                       <span className="text-xs text-slate-400 mr-1">
                         {new Date(p.effective_date + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
                       </span>
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => startEdit(p)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
-                          <Pencil size={14} />
-                        </button>
-                        <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
-                          {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                        </button>
-                      </div>
+                      {!readOnly && (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => startEdit(p)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
+                            <Pencil size={14} />
+                          </button>
+                          <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                            {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <p className="font-semibold text-slate-800">{p.material_type}</p>

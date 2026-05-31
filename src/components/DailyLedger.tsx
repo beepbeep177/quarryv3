@@ -6,12 +6,14 @@ import {
   Filter,
   Layers,
   Trash2,
+  Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
 
 interface DailyLedgerProps {
   onAddEntry: () => void;
+  onEditEntry: (tx: TransactionWithRelations) => void;
   refreshKey: number;
 }
 
@@ -21,7 +23,7 @@ function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function DailyLedger({ onAddEntry, refreshKey }: DailyLedgerProps) {
+export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey }: DailyLedgerProps) {
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -181,13 +183,21 @@ export default function DailyLedger({ onAddEntry, refreshKey }: DailyLedgerProps
                         <td className="px-4 py-3 text-center"><PaymentBadge mode={tx.payment_mode} /></td>
                         <td className="px-4 py-3 text-center"><StatusBadge status={tx.status} /></td>
                         <td className="px-4 py-3 text-center">
-                          <button
-                            onClick={() => handleDelete(tx.id)}
-                            disabled={deletingId === tx.id}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button
+                              onClick={() => onEditEntry(tx)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(tx.id)}
+                              disabled={deletingId === tx.id}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

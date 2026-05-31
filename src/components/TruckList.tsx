@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Truck, PlusCircle, Search, RefreshCw, X, Loader2 } from 'lucide-react';
+import { Truck, PlusCircle, Search, RefreshCw, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Truck as TruckType } from '../lib/database.types';
 
@@ -11,6 +11,11 @@ export default function TruckList() {
   const [form, setForm] = useState({ plate_number: '', driver_name: '', capacity_m3: '' });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ plate_number?: string }>({});
+  const [editingTruck, setEditingTruck] = useState<TruckType | null>(null);
+  const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', capacity_m3: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => { fetchTrucks(); }, []);
 
@@ -39,8 +44,51 @@ export default function TruckList() {
     }
   }
 
+  function startEdit(t: TruckType) {
+    setEditingTruck(t);
+    setEditForm({ plate_number: t.plate_number, driver_name: t.driver_name ?? '', capacity_m3: t.capacity_m3 > 0 ? String(t.capacity_m3) : '' });
+    setEditErrors({});
+  }
+
+  function cancelEdit() {
+    setEditingTruck(null);
+    setEditErrors({});
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editForm.plate_number.trim()) { setEditErrors({ plate_number: 'Required' }); return; }
+    setEditSaving(true);
+    const { data } = await supabase
+      .from('trucks')
+      .update({
+        plate_number: editForm.plate_number.trim().toUpperCase(),
+        driver_name: editForm.driver_name,
+        capacity_m3: parseFloat(editForm.capacity_m3) || 0,
+      })
+      .eq('id', editingTruck!.id)
+      .select()
+      .maybeSingle();
+    setEditSaving(false);
+    if (data) {
+      setTrucks(prev =>
+        prev.map(t => t.id === editingTruck!.id ? data as TruckType : t)
+            .sort((a, b) => a.plate_number.localeCompare(b.plate_number))
+      );
+      setEditingTruck(null);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this truck? This cannot be undone.')) return;
+    setDeletingId(id);
+    await supabase.from('trucks').delete().eq('id', id);
+    setTrucks(prev => prev.filter(t => t.id !== id));
+    setDeletingId(null);
+  }
+
   const filtered = trucks.filter(t =>
-    !search || t.plate_number.toLowerCase().includes(search.toLowerCase()) || t.driver_name.toLowerCase().includes(search.toLowerCase())
+    !search || t.plate_number.toLowerCase().includes(search.toLowerCase()) || (t.driver_name ?? '').toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -105,23 +153,67 @@ export default function TruckList() {
                 <th className="px-4 py-3 text-left">Plate Number</th>
                 <th className="px-4 py-3 text-left">Driver</th>
                 <th className="px-4 py-3 text-right">Capacity (m³)</th>
+                <th className="px-4 py-3 text-center w-20">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400">
                     <Truck size={28} className="mx-auto mb-2 text-slate-300" />
                     No trucks found
                   </td>
                 </tr>
               ) : filtered.map((t, i) => (
-                <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
-                  <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
-                  <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${t.capacity_m3} m³` : '—'}</td>
-                </tr>
+                editingTruck?.id === t.id ? (
+                  /* Inline Edit Row */
+                  <tr key={t.id} className="bg-blue-50/50">
+                    <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
+                    <td className="px-4 py-2" colSpan={4}>
+                      <form onSubmit={handleEditSubmit} className="flex items-center gap-2 flex-wrap">
+                        <div className="flex-1 min-w-[120px]">
+                          <input
+                            type="text"
+                            value={editForm.plate_number}
+                            onChange={e => { setEditForm(f => ({ ...f, plate_number: e.target.value })); setEditErrors({}); }}
+                            className={`w-full px-2 py-1.5 rounded-lg border text-sm font-mono uppercase focus:outline-none focus:ring-2 ${editErrors.plate_number ? 'border-red-300 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200 focus:border-blue-400'}`}
+                            placeholder="Plate"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-[120px]">
+                          <input type="text" value={editForm.driver_name} onChange={e => setEditForm(f => ({ ...f, driver_name: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="Driver" />
+                        </div>
+                        <div className="w-24">
+                          <input type="number" step="0.1" min="0" value={editForm.capacity_m3} onChange={e => setEditForm(f => ({ ...f, capacity_m3: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="m³" />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button type="submit" disabled={editSaving} className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-70 flex items-center gap-1">
+                            {editSaving ? <Loader2 size={12} className="animate-spin" /> : null}Save
+                          </button>
+                          <button type="button" onClick={cancelEdit} className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50">Cancel</button>
+                        </div>
+                      </form>
+                    </td>
+                  </tr>
+                ) : (
+                  /* Normal Row */
+                  <tr key={t.id} className="hover:bg-slate-50 transition-colors group">
+                    <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
+                    <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
+                    <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${t.capacity_m3} m³` : '—'}</td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => startEdit(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                          {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
               ))}
             </tbody>
           </table>

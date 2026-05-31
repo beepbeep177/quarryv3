@@ -13,12 +13,24 @@ import Reports from './components/Reports';
 import AuthPage from './pages/AuthPage';
 import { useAuth } from './contexts/AuthContext';
 import type { NavSection } from './types';
+import type { TransactionWithRelations } from './lib/database.types';
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<TransactionWithRelations | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  function handleEditTransaction(tx: TransactionWithRelations) {
+    setEditingTransaction(tx);
+    setShowAddModal(true);
+  }
+
+  function handleModalClose() {
+    setShowAddModal(false);
+    setEditingTransaction(null);
+  }
 
   if (loading) {
     return (
@@ -80,6 +92,7 @@ export default function App() {
             {activeSection === 'daily-view' && (
               <DailyLedger
                 onAddEntry={() => setShowAddModal(true)}
+                onEditEntry={handleEditTransaction}
                 refreshKey={refreshKey}
               />
             )}
@@ -95,8 +108,9 @@ export default function App() {
 
       {showAddModal && (
         <AddEntryModal
-          onClose={() => setShowAddModal(false)}
+          onClose={handleModalClose}
           onSuccess={handleAddSuccess}
+          transaction={editingTransaction ?? undefined}
         />
       )}
     </div>

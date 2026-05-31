@@ -1,17 +1,19 @@
 import { useEffect, useState, useCallback } from 'react';
 import { X, Calculator, Loader2, CheckCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Customer, Truck, Pricing, PaymentMode } from '../lib/database.types';
+import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 
 interface AddEntryModalProps {
   onClose: () => void;
   onSuccess: () => void;
+  transaction?: TransactionWithRelations;
 }
 
 interface FormData {
   customer_id: string;
   truck_id: string;
   dr_number: string;
+  transaction_date: string;
   length_cm: string;
   width_cm: string;
   height_cm: string;
@@ -20,13 +22,17 @@ interface FormData {
   passway: string;
   kulot: string;
   payment_mode: PaymentMode;
+  status: TransactionStatus;
   notes: string;
 }
+
+const todayDate = new Date().toISOString().split('T')[0];
 
 const EMPTY_FORM: FormData = {
   customer_id: '',
   truck_id: '',
   dr_number: '',
+  transaction_date: todayDate,
   length_cm: '',
   width_cm: '',
   height_cm: '',
@@ -35,11 +41,32 @@ const EMPTY_FORM: FormData = {
   passway: '0',
   kulot: '0',
   payment_mode: 'CASH',
+  status: 'PAID',
   notes: '',
 };
 
-export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps) {
-  const [form, setForm] = useState<FormData>(EMPTY_FORM);
+function txToForm(tx: TransactionWithRelations): FormData {
+  return {
+    customer_id: tx.customer_id,
+    truck_id: tx.truck_id,
+    dr_number: tx.dr_number,
+    transaction_date: tx.transaction_date,
+    length_cm: String(tx.length_cm),
+    width_cm: String(tx.width_cm),
+    height_cm: String(tx.height_cm),
+    unit_price: String(tx.unit_price),
+    dr_capitol: String(tx.dr_capitol),
+    passway: String(tx.passway),
+    kulot: String(tx.kulot),
+    payment_mode: tx.payment_mode,
+    status: tx.status,
+    notes: tx.notes ?? '',
+  };
+}
+
+export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEntryModalProps) {
+  const isEditing = !!transaction;
+  const [form, setForm] = useState<FormData>(isEditing ? txToForm(transaction!) : EMPTY_FORM);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
@@ -56,11 +83,11 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
       setCustomers((c.data ?? []) as Customer[]);
       setTrucks((t.data ?? []) as Truck[]);
       setPricingList((p.data ?? []) as Pricing[]);
-      if (p.data && p.data.length > 0) {
+      if (!isEditing && p.data && p.data.length > 0) {
         setForm(f => ({ ...f, unit_price: String(p.data[0].unit_price) }));
       }
     });
-  }, []);
+  }, [isEditing]);
 
   const n = (val: string) => parseFloat(val) || 0;
 
@@ -95,10 +122,9 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     setSaving(true);
-    const today = new Date().toISOString().split('T')[0];
 
-    const { error } = await supabase.from('transactions').insert({
-      transaction_date: today,
+    const payload = {
+      transaction_date: form.transaction_date,
       customer_id: form.customer_id,
       truck_id: form.truck_id,
       dr_number: form.dr_number.trim(),
@@ -110,9 +136,13 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
       passway: n(form.passway),
       kulot: n(form.kulot),
       payment_mode: form.payment_mode,
-      status: form.payment_mode === 'CASH' ? 'PAID' : 'PENDING',
+      status: isEditing ? form.status : (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
       notes: form.notes,
-    });
+    };
+
+    const { error } = isEditing
+      ? await supabase.from('transactions').update(payload).eq('id', transaction!.id)
+      : await supabase.from('transactions').insert(payload);
 
     setSaving(false);
     if (!error) {
@@ -134,7 +164,7 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Add Daily Entry</h2>
+            <h2 className="text-lg font-bold text-slate-800">{isEditing ? 'Edit Entry' : 'Add Daily Entry'}</h2>
             <p className="text-slate-500 text-xs mt-0.5">{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
@@ -143,6 +173,17 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
         </div>
 
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
+          {/* Transaction Date (edit mode only) */}
+          {isEditing && (
+            <Field label="Transaction Date">
+              <input
+                type="date"
+                value={form.transaction_date}
+                onChange={e => set('transaction_date', e.target.value)}
+                className={inputCls(false)}
+              />
+            </Field>
+          )}
           {/* Customer & Truck */}
           <div className="grid grid-cols-2 gap-4">
             <Field label="Customer" error={errors.customer_id}>
@@ -280,6 +321,31 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
             </div>
           </div>
 
+          {/* Status (edit mode only) */}
+          {isEditing && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Status</p>
+              <div className="flex gap-2">
+                {(['PAID', 'PENDING'] as TransactionStatus[]).map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => set('status', s)}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
+                      form.status === s
+                        ? s === 'PAID'
+                          ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200'
+                          : 'bg-amber-500 border-amber-500 text-white shadow-sm shadow-amber-200'
+                        : 'border-slate-200 text-slate-500 hover:border-slate-300 bg-white'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Notes */}
           <Field label="Notes (optional)">
             <textarea
@@ -308,11 +374,11 @@ export default function AddEntryModal({ onClose, onSuccess }: AddEntryModalProps
               className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
             >
               {saved ? (
-                <><CheckCircle size={16} /> Saved!</>
+                <><CheckCircle size={16} /> {isEditing ? 'Updated!' : 'Saved!'}</>
               ) : saving ? (
-                <><Loader2 size={16} className="animate-spin" /> Saving...</>
+                <><Loader2 size={16} className="animate-spin" /> {isEditing ? 'Updating...' : 'Saving...'}</>
               ) : (
-                'Save Entry'
+                isEditing ? 'Update Entry' : 'Save Entry'
               )}
             </button>
           </div>

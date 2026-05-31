@@ -41,8 +41,9 @@ export default function AuthPage() {
         setEmail('');
         setPassword('');
       }
-    } catch (err: any) {
-      setError(err.message || 'Authentication failed');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Authentication failed';
+      setError(message);
     } finally {
       setLoading(false);
     }

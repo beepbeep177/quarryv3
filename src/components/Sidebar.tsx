@@ -14,13 +14,16 @@ import {
   DollarSign,
   Mountain,
   Banknote,
+  ShieldCheck,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { NavSection } from '../types';
 
 interface SidebarProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection) => void;
+  canManageRecords: boolean;
+  showAccessControl: boolean;
 }
 
 interface MenuItem {
@@ -30,52 +33,64 @@ interface MenuItem {
   children?: { id: NavSection; label: string; icon: React.ReactNode }[];
 }
 
-const menuItems: MenuItem[] = [
-  {
-    id: 'dashboard',
-    label: 'Dashboard',
-    icon: <LayoutDashboard size={18} />,
-  },
-  {
-    id: 'daily-add',
-    label: 'Daily Transactions',
-    icon: <ClipboardList size={18} />,
-    children: [
-      { id: 'daily-add', label: 'Add Entry', icon: <PlusCircle size={15} /> },
-      { id: 'daily-view', label: 'View Today', icon: <Eye size={15} /> },
-    ],
-  },
-  {
-    id: 'customers-list',
-    label: 'Customers',
-    icon: <Users size={18} />,
-    children: [
-      { id: 'customers-list', label: 'Masterlist', icon: <BookUser size={15} /> },
-      { id: 'customers-ar', label: 'Accounts Receivable', icon: <ReceiptText size={15} /> },
-    ],
-  },
-  {
-    id: 'logistics-trucks',
-    label: 'Logistics',
-    icon: <Truck size={18} />,
-    children: [
-      { id: 'logistics-trucks', label: 'Truck List', icon: <ListTodo size={15} /> },
-      { id: 'logistics-pricing', label: 'Pricing', icon: <DollarSign size={15} /> },
-    ],
-  },
-  {
-    id: 'expenses',
-    label: 'Expenses',
-    icon: <Banknote size={18} />,
-  },
-  {
-    id: 'reports',
-    label: 'Reports',
-    icon: <FileBarChart2 size={18} />,
-  },
-];
+export default function Sidebar({ activeSection, onNavigate, canManageRecords, showAccessControl }: SidebarProps) {
+  const menuItems = useMemo<MenuItem[]>(() => {
+    const items: MenuItem[] = [
+      {
+        id: 'dashboard',
+        label: 'Dashboard',
+        icon: <LayoutDashboard size={18} />,
+      },
+      {
+        id: 'daily-view',
+        label: 'Daily Transactions',
+        icon: <ClipboardList size={18} />,
+        children: [
+          ...(canManageRecords ? [{ id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> }] : []),
+          { id: 'daily-view', label: 'View Today', icon: <Eye size={15} /> },
+        ],
+      },
+      {
+        id: 'customers-list',
+        label: 'Customers',
+        icon: <Users size={18} />,
+        children: [
+          { id: 'customers-list', label: 'Masterlist', icon: <BookUser size={15} /> },
+          { id: 'customers-ar', label: 'Accounts Receivable', icon: <ReceiptText size={15} /> },
+        ],
+      },
+      {
+        id: 'logistics-trucks',
+        label: 'Logistics',
+        icon: <Truck size={18} />,
+        children: [
+          { id: 'logistics-trucks', label: 'Truck List', icon: <ListTodo size={15} /> },
+          { id: 'logistics-pricing', label: 'Pricing', icon: <DollarSign size={15} /> },
+        ],
+      },
+      {
+        id: 'expenses',
+        label: 'Expenses',
+        icon: <Banknote size={18} />,
+      },
+      {
+        id: 'reports',
+        label: 'Reports',
+        icon: <FileBarChart2 size={18} />,
+      },
+    ];
 
-export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
+    if (showAccessControl) {
+      items.push({
+        id: 'access-control',
+        label: 'Access Control',
+        icon: <ShieldCheck size={18} />,
+      });
+    }
+
+    return items;
+  }, [canManageRecords, showAccessControl]);
+
   const getDefaultOpen = () => {
     const map: Record<string, boolean> = {
       'daily-add': true,
@@ -85,7 +100,7 @@ export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
       'logistics-trucks': true,
       'logistics-pricing': true,
     };
-    return map[activeSection] ? activeSection.startsWith('daily') ? 'daily-add' :
+    return map[activeSection] ? activeSection.startsWith('daily') ? 'daily-view' :
       activeSection.startsWith('customers') ? 'customers-list' : 'logistics-trucks' : null;
   };
 
@@ -102,7 +117,6 @@ export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
 
   return (
     <aside className="w-64 min-h-screen bg-slate-950 flex flex-col">
-      {/* Logo */}
       <div className="px-5 py-5 border-b border-slate-800 flex items-center gap-3">
         <div className="w-9 h-9 rounded-lg bg-emerald-500 flex items-center justify-center flex-shrink-0">
           <Mountain size={20} className="text-white" />
@@ -113,7 +127,6 @@ export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
         </div>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {menuItems.map(item => {
           const hasChildren = !!item.children;
@@ -175,7 +188,6 @@ export default function Sidebar({ activeSection, onNavigate }: SidebarProps) {
         })}
       </nav>
 
-      {/* Footer */}
       <div className="px-5 py-4 border-t border-slate-800">
         <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 QuarryPro</p>
       </div>

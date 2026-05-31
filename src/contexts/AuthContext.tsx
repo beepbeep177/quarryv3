@@ -1,66 +1,107 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+import type { AppUser, UserRole } from '../lib/database.types';
 
 interface AuthContextType {
   session: Session | null;
   user: Session['user'] | null;
+  profile: AppUser | null;
+  role: UserRole | null;
+  isManager: boolean;
   loading: boolean;
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const loadProfile = useCallback(async (userId: string | undefined) => {
+    if (!userId) {
+      setProfile(null);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('app_users')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    setProfile((data ?? null) as AppUser | null);
+  }, []);
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
+    let active = true;
+
+    async function initialize() {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!active) return;
+
+      setSession(currentSession);
+      await loadProfile(currentSession?.user.id);
+      if (active) setLoading(false);
+    }
+
+    initialize();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setLoading(true);
+      loadProfile(nextSession?.user.id).finally(() => {
+        if (active) setLoading(false);
+      });
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [loadProfile]);
 
-  const signUp = async (email: string, password: string) => {
+  const signUp = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
-  };
+  }, []);
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-  };
+  }, []);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
-  };
+    setProfile(null);
+  }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        session,
-        user: session?.user ?? null,
-        loading,
-        signUp,
-        signIn,
-        signOut,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const refreshProfile = useCallback(async () => {
+    await loadProfile(session?.user.id);
+  }, [loadProfile, session?.user.id]);
+
+  const value = useMemo<AuthContextType>(() => ({
+    session,
+    user: session?.user ?? null,
+    profile,
+    role: profile?.role ?? null,
+    isManager: profile?.role === 'manager',
+    loading,
+    signUp,
+    signIn,
+    signOut,
+    refreshProfile,
+  }), [loading, profile, refreshProfile, session, signIn, signOut, signUp]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

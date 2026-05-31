@@ -7,7 +7,8 @@ export type NavSection =
   | 'logistics-trucks'
   | 'logistics-pricing'
   | 'expenses'
-  | 'reports';
+  | 'reports'
+  | 'access-control';
 
 export interface NavItem {
   id: NavSection;

@@ -5,6 +5,7 @@ import type { ExpenseWithCategory } from '../lib/database.types';
 
 interface ExpensesLedgerProps {
   refreshKey: number;
+  readOnly?: boolean;
 }
 
 function fmt(v: number) {
@@ -12,16 +13,16 @@ function fmt(v: number) {
 }
 
 const categoryColors: Record<string, { bg: string; text: string; border: string }> = {
-  'Diesel': { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  Diesel: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
   'Salary/Advances': { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
   'Materials & Maintenance': { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-  'Passway': { bg: 'bg-cyan-50', text: 'text-cyan-700', border: 'border-cyan-200' },
-  'Meals': { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
+  Passway: { bg: 'bg-cyan-50', text: 'text-cyan-700', border: 'border-cyan-200' },
+  Meals: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
   'Diesel Misc/RFID': { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200' },
-  'Miscellaneous': { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' },
+  Miscellaneous: { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' },
 };
 
-export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
+export default function ExpensesLedger({ refreshKey, readOnly = false }: ExpensesLedgerProps) {
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -58,7 +59,7 @@ export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
   });
 
   const catColor = (catName?: string) => {
-    return categoryColors[catName ?? 'Miscellaneous'] || categoryColors['Miscellaneous'];
+    return categoryColors[catName ?? 'Miscellaneous'] || categoryColors.Miscellaneous;
   };
 
   return (
@@ -74,7 +75,6 @@ export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
         </button>
       </div>
 
-      {/* Search */}
       <div className="relative">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
         <input
@@ -86,7 +86,6 @@ export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
         />
       </div>
 
-      {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
@@ -109,7 +108,7 @@ export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
                   <th className="px-4 py-3 text-left">Description</th>
                   <th className="px-4 py-3 text-right">Amount</th>
                   <th className="px-4 py-3 text-center">Liters</th>
-                  <th className="px-4 py-3"></th>
+                  {!readOnly && <th className="px-4 py-3"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -148,15 +147,17 @@ export default function ExpensesLedger({ refreshKey }: ExpensesLedgerProps) {
                           <span className="text-slate-400 text-xs">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => handleDelete(exp.id)}
-                          disabled={deletingId === exp.id}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
+                      {!readOnly && (
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleDelete(exp.id)}
+                            disabled={deletingId === exp.id}
+                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

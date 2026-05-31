@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function AccountsReceivable() {
+export default function AccountsReceivable({ readOnly = false }: { readOnly?: boolean }) {
   const [records, setRecords] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -53,7 +54,8 @@ export default function AccountsReceivable() {
         </button>
       </div>
 
-      {/* Summary card */}
+      {readOnly && <ReadOnlyNotice message="Operators can review outstanding balances, but only managers can mark receivables as paid." />}
+
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
           <TrendingDown size={22} className="text-amber-600" />
@@ -65,13 +67,11 @@ export default function AccountsReceivable() {
         </div>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
         <input type="text" placeholder="Search customer or DR#..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
       </div>
 
-      {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
@@ -94,7 +94,7 @@ export default function AccountsReceivable() {
                   <th className="px-4 py-3 text-right">Volume (m³)</th>
                   <th className="px-4 py-3 text-right">Total Amount</th>
                   <th className="px-4 py-3 text-center">Mode</th>
-                  <th className="px-4 py-3 text-center">Action</th>
+                  {!readOnly && <th className="px-4 py-3 text-center">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -112,16 +112,18 @@ export default function AccountsReceivable() {
                         ? <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>
                         : <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => markPaid(r.id)}
-                        disabled={markingId === r.id}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors disabled:opacity-60"
-                      >
-                        {markingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                        Mark Paid
-                      </button>
-                    </td>
+                    {!readOnly && (
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => markPaid(r.id)}
+                          disabled={markingId === r.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors disabled:opacity-60"
+                        >
+                          {markingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                          Mark Paid
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

@@ -20,6 +20,7 @@ interface DashboardStats {
 interface DashboardProps {
   onNavigate: (section: 'daily-add' | 'daily-view' | 'customers-ar') => void;
   refreshKey: number;
+  canManageRecords: boolean;
 }
 
 const today = new Date().toISOString().split('T')[0];
@@ -36,7 +37,7 @@ function formatVolume(val: number) {
   return val.toFixed(4);
 }
 
-export default function Dashboard({ onNavigate, refreshKey }: DashboardProps) {
+export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: DashboardProps) {
   const [stats, setStats] = useState<DashboardStats>({
     totalSalesToday: 0,
     totalVolume: 0,
@@ -114,7 +115,6 @@ export default function Dashboard({ onNavigate, refreshKey }: DashboardProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
@@ -133,7 +133,6 @@ export default function Dashboard({ onNavigate, refreshKey }: DashboardProps) {
         </button>
       </div>
 
-      {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {statCards.map(card => (
           <div
@@ -154,7 +153,6 @@ export default function Dashboard({ onNavigate, refreshKey }: DashboardProps) {
         ))}
       </div>
 
-      {/* Recent Transactions */}
       <div className="bg-white rounded-xl border border-slate-200">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <h2 className="font-semibold text-slate-800">Today's Transactions</h2>
@@ -175,10 +173,10 @@ export default function Dashboard({ onNavigate, refreshKey }: DashboardProps) {
             <Layers size={32} className="text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm font-medium">No transactions today</p>
             <button
-              onClick={() => onNavigate('daily-add')}
+              onClick={() => onNavigate(canManageRecords ? 'daily-add' : 'daily-view')}
               className="mt-3 text-sm text-emerald-600 font-medium hover:text-emerald-700"
             >
-              Add first entry
+              {canManageRecords ? 'Add first entry' : "View today's ledger"}
             </button>
           </div>
         ) : (

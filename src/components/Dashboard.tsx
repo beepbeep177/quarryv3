@@ -176,7 +176,7 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
               onClick={() => onNavigate(canManageRecords ? 'daily-add' : 'daily-view')}
               className="mt-3 text-sm text-emerald-600 font-medium hover:text-emerald-700"
             >
-              {canManageRecords ? 'Add first entry' : 'View today\'s ledger'}
+              {canManageRecords ? 'Add first entry' : "View today's ledger"}
             </button>
           </div>
         ) : (

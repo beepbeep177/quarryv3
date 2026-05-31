@@ -21,6 +21,16 @@ export interface Database {
         Insert: Omit<Transaction, 'id' | 'created_at' | 'volume_m3' | 'amount' | 'total_amount'>;
         Update: Partial<Omit<Transaction, 'id' | 'created_at' | 'volume_m3' | 'amount' | 'total_amount'>>;
       };
+      expense_categories: {
+        Row: ExpenseCategory;
+        Insert: Omit<ExpenseCategory, 'id' | 'created_at'>;
+        Update: Partial<Omit<ExpenseCategory, 'id' | 'created_at'>>;
+      };
+      expenses: {
+        Row: Expense;
+        Insert: Omit<Expense, 'id' | 'created_at'>;
+        Update: Partial<Omit<Expense, 'id' | 'created_at'>>;
+      };
     };
   };
 }

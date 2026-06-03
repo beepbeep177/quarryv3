@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mountain, Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 type AuthMode = 'login' | 'signup';
@@ -53,13 +53,17 @@ export default function AuthPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-12 h-12 rounded-xl bg-emerald-500 flex items-center justify-center">
-            <Mountain size={24} className="text-white" />
+        <div className="flex items-center justify-center gap-4 mb-8 w-full px-4">
+          <div className="w-20 h-20 sm:w-20 sm:h-20 rounded-full flex items-center justify-center p-1 shadow-sm shrink-0">
+            <img 
+              src="/jafcor_logo.png" 
+              alt="Jafcor Logo" 
+              className="w-full h-full object-contain" 
+            />
           </div>
-          <div>
-            <p className="text-white font-bold text-lg">QuarryPro</p>
-            <p className="text-slate-400 text-xs">Management System</p>
+          <div className="min-w-0">
+            <p className="text-white font-bold text-xl tracking-wide truncate">JAFCOR</p>
+            <p className="text-slate-400 text-sm truncate">Management System</p>
           </div>
         </div>
 
@@ -183,7 +187,7 @@ export default function AuthPage() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-slate-400 text-xs">
-          <p>QuarryPro v1.0.0 - BeepCo.</p>
+          <p>Jafcor v1.0.0 - BeepCo.</p>
         </div>
       </div>
     </div>

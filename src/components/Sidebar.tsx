@@ -12,7 +12,6 @@ import {
   ReceiptText,
   ListTodo,
   DollarSign,
-  Mountain,
   Banknote,
   ShieldCheck,
 } from 'lucide-react';
@@ -117,13 +116,17 @@ export default function Sidebar({ activeSection, onNavigate, canManageRecords, s
 
   return (
     <aside className="w-64 min-h-screen bg-slate-950 flex flex-col">
-      <div className="px-5 py-5 border-b border-slate-800 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-lg bg-emerald-500 flex items-center justify-center flex-shrink-0">
-          <Mountain size={20} className="text-white" />
+      <div className="px-4 py-5 border-b border-slate-800 flex items-center gap-3 w-full">
+        <div className="w-12 h-12 rounded-full flex items-center justify-center p-0.5 shadow-sm shrink-0 bg-white/5">
+          <img 
+            src="/jafcor_logo.png" 
+            alt="Jafcor Logo" 
+            className="w-full h-full object-contain" 
+          />
         </div>
-        <div>
-          <p className="text-white font-bold text-sm leading-tight">QuarryPro</p>
-          <p className="text-slate-400 text-xs">Management System</p>
+        <div className="min-w-0">
+          <p className="text-white font-bold text-base tracking-wide truncate">JAFCOR</p>
+          <p className="text-slate-400 text-xs truncate">Management System</p>
         </div>
       </div>
 
@@ -188,8 +191,9 @@ export default function Sidebar({ activeSection, onNavigate, canManageRecords, s
         })}
       </nav>
 
+      {/* Footer Update */}
       <div className="px-5 py-4 border-t border-slate-800">
-        <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 QuarryPro</p>
+        <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 Jafcor Dev Co.</p>
       </div>
     </aside>
   );

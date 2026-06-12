@@ -21,8 +21,7 @@ import type { NavSection } from '../types';
 interface SidebarProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection) => void;
-  canManageRecords: boolean;
-  showAccessControl: boolean;
+  isManager: boolean;
 }
 
 interface MenuItem {
@@ -32,20 +31,25 @@ interface MenuItem {
   children?: { id: NavSection; label: string; icon: React.ReactNode }[];
 }
 
-export default function Sidebar({ activeSection, onNavigate, canManageRecords, showAccessControl }: SidebarProps) {
+export default function Sidebar({ activeSection, onNavigate, isManager }: SidebarProps) {
   const menuItems = useMemo<MenuItem[]>(() => {
-    const items: MenuItem[] = [
-      {
+    const items: MenuItem[] = [];
+
+    if (isManager) {
+      items.push({
         id: 'dashboard',
         label: 'Dashboard',
         icon: <LayoutDashboard size={18} />,
-      },
+      });
+    }
+
+    items.push(
       {
         id: 'daily-view',
         label: 'Daily Transactions',
         icon: <ClipboardList size={18} />,
         children: [
-          ...(canManageRecords ? [{ id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> }] : []),
+          { id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> },
           { id: 'daily-view', label: 'View Today', icon: <Eye size={15} /> },
         ],
       },
@@ -72,23 +76,25 @@ export default function Sidebar({ activeSection, onNavigate, canManageRecords, s
         label: 'Expenses',
         icon: <Banknote size={18} />,
       },
-      {
-        id: 'reports',
-        label: 'Reports',
-        icon: <FileBarChart2 size={18} />,
-      },
-    ];
+    );
 
-    if (showAccessControl) {
-      items.push({
-        id: 'access-control',
-        label: 'Access Control',
-        icon: <ShieldCheck size={18} />,
-      });
+    if (isManager) {
+      items.push(
+        {
+          id: 'reports',
+          label: 'Reports',
+          icon: <FileBarChart2 size={18} />,
+        },
+        {
+          id: 'access-control',
+          label: 'Access Control',
+          icon: <ShieldCheck size={18} />,
+        },
+      );
     }
 
     return items;
-  }, [canManageRecords, showAccessControl]);
+  }, [isManager]);
 
   const getDefaultOpen = () => {
     const map: Record<string, boolean> = {

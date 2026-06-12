@@ -2,7 +2,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET';
+export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH';
 export type TransactionStatus = 'PENDING' | 'PAID';
 
 export type Database = {

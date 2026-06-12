@@ -13,7 +13,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, TransactionWithRelations } from '../lib/database.types';
 
-type ReportTab = 'sales' | 'customers' | 'net';
+type ReportTab = 'sales' | 'customers' | 'expenses' | 'net';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
 type Grouping = 'DAY' | 'WEEK' | 'MONTH';
 
@@ -39,6 +39,13 @@ interface NetIncomeSummary {
   bucketStart: string;
   revenue: number;
   expenses: number;
+}
+
+interface ExpenseSummaryRow {
+  bucketStart: string;
+  count: number;
+  total: number;
+  byCategory: Record<string, number>;
 }
 
 interface DateRangeSummary {
@@ -205,6 +212,7 @@ export default function Reports() {
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [customerId, setCustomerId] = useState<'ALL' | string>('ALL');
   const [customerGrouping, setCustomerGrouping] = useState<Grouping>('WEEK');
+  const [expenseGrouping, setExpenseGrouping] = useState<Grouping>('DAY');
   const [netGrouping, setNetGrouping] = useState<Grouping>('WEEK');
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
@@ -302,6 +310,37 @@ export default function Reports() {
   const poTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'P.O').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const offsetTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'OFFSET').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
 
+  const expenseSummaryList = useMemo(() => {
+    const bucketMap: Record<string, ExpenseSummaryRow> = {};
+
+    expenses.forEach(expense => {
+      const bucketStart = getBucketStart(expense.expense_date, expenseGrouping);
+      if (!bucketMap[bucketStart]) {
+        bucketMap[bucketStart] = { bucketStart, count: 0, total: 0, byCategory: {} };
+      }
+      bucketMap[bucketStart].count += 1;
+      bucketMap[bucketStart].total += expense.amount ?? 0;
+      const catName = expense.expense_categories?.name ?? 'Uncategorized';
+      bucketMap[bucketStart].byCategory[catName] = (bucketMap[bucketStart].byCategory[catName] ?? 0) + (expense.amount ?? 0);
+    });
+
+    return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
+  }, [expenses, expenseGrouping]);
+
+  const totalExpenseRecords = useMemo(() => expenses.length, [expenses]);
+
+  const expenseCategoryTotals = useMemo(() => {
+    const map: Record<string, number> = {};
+    expenses.forEach(expense => {
+      const catName = expense.expense_categories?.name ?? 'Uncategorized';
+      map[catName] = (map[catName] ?? 0) + (expense.amount ?? 0);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [expenses]);
+
+  const topExpenseCategory = expenseCategoryTotals[0]?.[0] ?? '—';
+  const topExpenseCategoryAmount = expenseCategoryTotals[0]?.[1] ?? 0;
+
   const customerTransactions = useMemo(() => {
     const filtered = customerId === 'ALL'
       ? transactions
@@ -387,6 +426,7 @@ export default function Reports() {
           {[
             { id: 'sales', label: 'Sales Summary' },
             { id: 'customers', label: 'Customer Sales History' },
+            { id: 'expenses', label: 'Expense Summary' },
             { id: 'net', label: 'Expense vs Revenue' },
           ].map(tab => (
             <button
@@ -472,6 +512,24 @@ export default function Reports() {
                 ))}
               </div>
             </>
+          )}
+
+          {activeTab === 'expenses' && (
+            <div className="flex items-center gap-1.5">
+              {(['DAY', 'WEEK', 'MONTH'] as const).map(group => (
+                <button
+                  key={group}
+                  onClick={() => setExpenseGrouping(group)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    expenseGrouping === group
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {group}
+                </button>
+              ))}
+            </div>
           )}
 
           {activeTab === 'net' && (
@@ -702,6 +760,114 @@ export default function Reports() {
               </div>
             )}
           </div>
+        </>
+      )}
+
+      {activeTab === 'expenses' && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Total Expenses', value: `₱${fmt(totalExpenses)}`, icon: <Banknote size={18} className="text-red-500" />, bg: 'bg-red-50' },
+              { label: 'Records', value: String(totalExpenseRecords), icon: <ReceiptText size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
+              { label: 'Top Category', value: topExpenseCategory, icon: <FileBarChart2 size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
+              { label: 'Top Category Total', value: `₱${fmt(topExpenseCategoryAmount)}`, icon: <TrendingUp size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
+            ].map(card => (
+              <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
+                <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>
+                <p className="text-xs text-slate-500 font-medium">{card.label}</p>
+                <p className="text-lg font-bold text-slate-800 mt-0.5 tabular-nums truncate">{loading ? '—' : card.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h2 className="font-semibold text-slate-800">{expenseGrouping === 'MONTH' ? 'Monthly Breakdown' : expenseGrouping === 'WEEK' ? 'Weekly Breakdown' : 'Daily Breakdown'}</h2>
+            </div>
+            {loading ? (
+              <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
+                <RefreshCw size={16} className="animate-spin" /> Loading expense report...
+              </div>
+            ) : expenseSummaryList.length === 0 ? (
+              <div className="py-16 text-center">
+                <Banknote size={32} className="text-slate-300 mx-auto mb-3" />
+                <p className="text-slate-500 text-sm">No expense data in selected range</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                      <th className="px-4 py-3 text-left">Period</th>
+                      <th className="px-4 py-3 text-right">Records</th>
+                      <th className="px-4 py-3 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {expenseSummaryList.map(row => (
+                      <tr key={row.bucketStart} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">
+                          {formatBucketLabel(row.bucketStart, expenseGrouping)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{row.count}</td>
+                        <td className="px-4 py-3 text-right font-bold text-red-600 tabular-nums">₱{fmt(row.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-900">
+                      <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Totals</td>
+                      <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">{totalExpenseRecords}</td>
+                      <td className="px-4 py-3 text-right text-red-300 font-bold tabular-nums">₱{fmt(totalExpenses)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {expenseCategoryTotals.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100">
+                <h2 className="font-semibold text-slate-800">By Category</h2>
+              </div>
+              {loading ? (
+                <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
+                  <RefreshCw size={16} className="animate-spin" /> Loading...
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                        <th className="px-4 py-3 text-left">Category</th>
+                        <th className="px-4 py-3 text-right">Total</th>
+                        <th className="px-4 py-3 text-right">Share</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {expenseCategoryTotals.map(([catName, catTotal]) => (
+                        <tr key={catName} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-slate-700">{catName}</td>
+                          <td className="px-4 py-3 text-right text-red-600 font-semibold tabular-nums">₱{fmt(catTotal)}</td>
+                          <td className="px-4 py-3 text-right text-slate-500 tabular-nums">
+                            {totalExpenses > 0 ? `${((catTotal / totalExpenses) * 100).toFixed(1)}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-900">
+                        <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Total</td>
+                        <td className="px-4 py-3 text-right text-red-300 font-bold tabular-nums">₱{fmt(totalExpenses)}</td>
+                        <td className="px-4 py-3 text-right text-slate-400 tabular-nums">100%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 

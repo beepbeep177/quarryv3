@@ -9,10 +9,19 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 function generatePassword(length = 12): string {
-  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%';
-  return Array.from(crypto.getRandomValues(new Uint8Array(length)))
-    .map(b => chars[b % chars.length])
-    .join('');
+  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*()-_=+';
+  const result: string[] = [];
+  // Use rejection sampling to eliminate modulo bias
+  const maxValid = Math.floor(256 / chars.length) * chars.length;
+  while (result.length < length) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length * 2));
+    for (const b of bytes) {
+      if (b < maxValid && result.length < length) {
+        result.push(chars[b % chars.length]);
+      }
+    }
+  }
+  return result.join('');
 }
 
 function formatTableName(tableName: string) {
@@ -132,6 +141,10 @@ export default function AccessControl() {
   }
 
   async function copyToClipboard(text: string, type: 'email' | 'password') {
+    if (!navigator.clipboard) {
+      setCreateError('Clipboard not available — please copy manually.');
+      return;
+    }
     try {
       await navigator.clipboard.writeText(text);
       if (type === 'email') {
@@ -142,7 +155,7 @@ export default function AccessControl() {
         setTimeout(() => setCopiedPassword(false), 2000);
       }
     } catch {
-      // clipboard not available
+      setCreateError('Could not copy to clipboard — please copy manually.');
     }
   }
 

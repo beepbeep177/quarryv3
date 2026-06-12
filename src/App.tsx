@@ -18,14 +18,13 @@ import type { TransactionWithRelations } from './lib/database.types';
 
 export default function App() {
   const { user, role, isManager, loading, signOut } = useAuth();
-  const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
+  const [activeSection, setActiveSection] = useState<NavSection>(isManager ? 'dashboard' : 'daily-view');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<TransactionWithRelations | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const canManageRecords = isManager;
+  const canManageRecords = !!role;
 
   function handleEditTransaction(tx: TransactionWithRelations) {
-    if (!canManageRecords) return;
     setEditingTransaction(tx);
     setShowAddModal(true);
   }
@@ -51,11 +50,12 @@ export default function App() {
   }
 
   function handleNavigate(section: NavSection) {
+    // Operators cannot access manager-only sections
+    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control')) {
+      return;
+    }
+
     if (section === 'daily-add') {
-      if (!canManageRecords) {
-        setActiveSection('daily-view');
-        return;
-      }
       setShowAddModal(true);
       setActiveSection('daily-view');
       return;
@@ -78,8 +78,7 @@ export default function App() {
       <Sidebar
         activeSection={activeSection}
         onNavigate={handleNavigate}
-        canManageRecords={canManageRecords}
-        showAccessControl={isManager}
+        isManager={isManager}
       />
 
       <main className="flex-1 overflow-auto flex flex-col">
@@ -89,9 +88,9 @@ export default function App() {
             <p className="text-xs text-slate-500">Signed in as {role ?? 'operator'}</p>
           </div>
           <div className="flex items-center gap-3">
-            {!canManageRecords && (
-              <span className="inline-flex px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold border border-amber-200">
-                Read-only operator access
+            {!isManager && (
+              <span className="inline-flex px-3 py-1 rounded-full bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200">
+                Encoder access
               </span>
             )}
             <button
@@ -132,7 +131,7 @@ export default function App() {
         </div>
       </main>
 
-      {showAddModal && canManageRecords && (
+      {showAddModal && (
         <AddEntryModal
           onClose={handleModalClose}
           onSuccess={handleAddSuccess}

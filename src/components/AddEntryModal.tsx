@@ -165,7 +165,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET'];
+  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH'];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -256,7 +256,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
           {/* Unit Price */}
           <Field label="Unit Price (₱/m³)" error={errors.unit_price}>
-            <div className="flex gap-2 items-start">
+            <div className="space-y-2">
               <input
                 type="number"
                 step="0.01"
@@ -264,22 +264,21 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
                 placeholder="0.00"
                 value={form.unit_price}
                 onChange={e => set('unit_price', e.target.value)}
-                className={inputCls(!!errors.unit_price) + ' flex-1'}
+                className={inputCls(!!errors.unit_price)}
               />
-              <div className="flex gap-1.5 flex-wrap">
+              <div className="flex gap-2 flex-wrap">
                 {pricingList.map(p => (
                   <button
                     key={p.id}
                     type="button"
                     onClick={() => set('unit_price', String(p.unit_price))}
-                    className={`px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap ${
                       form.unit_price === String(p.unit_price)
                         ? 'bg-emerald-500 border-emerald-500 text-white'
                         : 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600'
                     }`}
                   >
-                    {p.material_type}
-                    <span className="ml-1 opacity-75">₱{p.unit_price}</span>
+                    {p.material_type} <span className="opacity-75">₱{p.unit_price}</span>
                   </button>
                 ))}
               </div>
@@ -320,6 +319,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
                         ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200'
                         : mode === 'P.O'
                         ? 'bg-amber-500 border-amber-500 text-white shadow-sm shadow-amber-200'
+                        : mode === 'GCASH'
+                        ? 'bg-blue-500 border-blue-500 text-white shadow-sm shadow-blue-200'
                         : 'bg-slate-600 border-slate-600 text-white'
                       : 'border-slate-200 text-slate-500 hover:border-slate-300 bg-white'
                   }`}

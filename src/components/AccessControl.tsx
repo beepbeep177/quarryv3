@@ -112,6 +112,11 @@ export default function AccessControl() {
       setCreateError('Email is required');
       return;
     }
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(newEmail.trim())) {
+      setCreateError('Please enter a valid email address');
+      return;
+    }
     if (newPassword.length < 6) {
       setCreateError('Password must be at least 6 characters');
       return;
@@ -142,7 +147,7 @@ export default function AccessControl() {
 
   async function copyToClipboard(text: string, type: 'email' | 'password') {
     if (!navigator.clipboard) {
-      setCreateError('Clipboard not available — please copy manually.');
+      setCreateError('Clipboard not available - please copy manually.');
       return;
     }
     try {
@@ -155,7 +160,7 @@ export default function AccessControl() {
         setTimeout(() => setCopiedPassword(false), 2000);
       }
     } catch {
-      setCreateError('Could not copy to clipboard — please copy manually.');
+      setCreateError('Could not copy to clipboard - please copy manually.');
     }
   }
 

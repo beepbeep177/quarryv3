@@ -1,8 +1,28 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, ShieldCheck, History, Loader2 } from 'lucide-react';
+import { RefreshCw, ShieldCheck, History, Loader2, UserPlus, Eye, EyeOff, Copy, CheckCheck, RefreshCcw } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { AppUser, AuditLog, UserRole } from '../lib/database.types';
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+function generatePassword(length = 12): string {
+  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*()-_=+';
+  const result: string[] = [];
+  // Use rejection sampling to eliminate modulo bias
+  const maxValid = Math.floor(256 / chars.length) * chars.length;
+  while (result.length < length) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length * 2));
+    for (const b of bytes) {
+      if (b < maxValid && result.length < length) {
+        result.push(chars[b % chars.length]);
+      }
+    }
+  }
+  return result.join('');
+}
 
 function formatTableName(tableName: string) {
   return tableName
@@ -37,6 +57,16 @@ export default function AccessControl() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+
+  // Create account state
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState(generatePassword());
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [createdCredentials, setCreatedCredentials] = useState<{ email: string; password: string } | null>(null);
+  const [copiedEmail, setCopiedEmail] = useState(false);
+  const [copiedPassword, setCopiedPassword] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -74,6 +104,66 @@ export default function AccessControl() {
     setSavingUserId(null);
   }
 
+  async function handleCreateAccount(e: React.FormEvent) {
+    e.preventDefault();
+    setCreateError('');
+
+    if (!newEmail.trim()) {
+      setCreateError('Email is required');
+      return;
+    }
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(newEmail.trim())) {
+      setCreateError('Please enter a valid email address');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setCreateError('Password must be at least 6 characters');
+      return;
+    }
+
+    setCreating(true);
+    // Use a separate client with no session persistence so the manager's
+    // current session is NOT replaced when the new user account is created.
+    const tempClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+
+    const { error } = await tempClient.auth.signUp({
+      email: newEmail.trim(),
+      password: newPassword,
+    });
+
+    setCreating(false);
+    if (error) {
+      setCreateError(error.message);
+    } else {
+      setCreatedCredentials({ email: newEmail.trim(), password: newPassword });
+      setNewEmail('');
+      setNewPassword(generatePassword());
+      await fetchData();
+    }
+  }
+
+  async function copyToClipboard(text: string, type: 'email' | 'password') {
+    if (!navigator.clipboard) {
+      setCreateError('Clipboard not available - please copy manually.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      if (type === 'email') {
+        setCopiedEmail(true);
+        setTimeout(() => setCopiedEmail(false), 2000);
+      } else {
+        setCopiedPassword(true);
+        setTimeout(() => setCopiedPassword(false), 2000);
+      }
+    } catch {
+      setCreateError('Could not copy to clipboard - please copy manually.');
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -90,6 +180,128 @@ export default function AccessControl() {
           Refresh
         </button>
       </div>
+
+      {/* Create Account Section */}
+      <section className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+          <UserPlus size={18} className="text-emerald-600" />
+          <div>
+            <h2 className="font-semibold text-slate-800">Create User Account</h2>
+            <p className="text-xs text-slate-500">Create a new account and share the credentials with the user.</p>
+          </div>
+        </div>
+
+        <div className="px-5 py-5">
+          {createdCredentials ? (
+            <div className="space-y-4">
+              <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4">
+                <p className="text-sm font-semibold text-emerald-800 mb-3">✓ Account created! Share these credentials with the user:</p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3 bg-white rounded-lg border border-emerald-200 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-500 font-medium">Email</p>
+                      <p className="text-sm font-semibold text-slate-800 truncate">{createdCredentials.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(createdCredentials.email, 'email')}
+                      className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+                    >
+                      {copiedEmail ? <CheckCheck size={13} /> : <Copy size={13} />}
+                      {copiedEmail ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 bg-white rounded-lg border border-emerald-200 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-500 font-medium">Password</p>
+                      <p className="text-sm font-mono font-semibold text-slate-800 truncate">{createdCredentials.password}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(createdCredentials.password, 'password')}
+                      className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+                    >
+                      {copiedPassword ? <CheckCheck size={13} /> : <Copy size={13} />}
+                      {copiedPassword ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCreatedCredentials(null)}
+                className="w-full py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Create Another Account
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleCreateAccount} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Email Address</label>
+                  <input
+                    type="email"
+                    value={newEmail}
+                    onChange={e => { setNewEmail(e.target.value); setCreateError(''); }}
+                    placeholder="user@example.com"
+                    disabled={creating}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 transition-shadow"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Password</label>
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={e => { setNewPassword(e.target.value); setCreateError(''); }}
+                      placeholder="Min. 6 characters"
+                      disabled={creating}
+                      className="w-full pl-3 pr-20 py-2 rounded-lg border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 transition-shadow font-mono"
+                    />
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword(v => !v)}
+                        className="p-1.5 rounded text-slate-400 hover:text-slate-600 transition-colors"
+                        tabIndex={-1}
+                      >
+                        {showNewPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewPassword(generatePassword())}
+                        className="p-1.5 rounded text-slate-400 hover:text-emerald-600 transition-colors"
+                        title="Generate new password"
+                        tabIndex={-1}
+                      >
+                        <RefreshCcw size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {createError && (
+                <p className="text-xs text-red-600">{createError}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={creating}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 text-white text-sm font-semibold transition-colors"
+              >
+                {creating ? (
+                  <><Loader2 size={15} className="animate-spin" /> Creating...</>
+                ) : (
+                  <><UserPlus size={15} /> Create Account</>
+                )}
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
         <section className="xl:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">

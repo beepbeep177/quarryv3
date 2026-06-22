@@ -9,6 +9,7 @@ import {
   Users,
   Banknote,
   ReceiptText,
+  X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
@@ -57,6 +58,31 @@ interface DateRangeSummary {
   salesGrouping: 'DAY' | 'MONTH';
 }
 
+// Helper component for modal detail items
+function DetailItem({ 
+  label, 
+  value, 
+  mono = false, 
+  highlight = false 
+}: { 
+  label: string; 
+  value: string; 
+  mono?: boolean; 
+  highlight?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs text-slate-400 mb-1">{label}</p>
+      <p className={`text-sm ${
+        highlight 
+          ? 'text-emerald-600 font-bold' 
+          : 'text-slate-700 font-medium'
+      } ${mono ? 'font-mono' : ''}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -224,6 +250,10 @@ export default function Reports() {
   const [loading, setLoading] = useState(true);
   const [customerLoading, setCustomerLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Modal state for transaction details
+  const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithRelations | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const range = useMemo(
     () => getDateRangeSummary(periodMode, dateFrom, dateTo, selectedMonth, selectedYear),
@@ -430,8 +460,193 @@ export default function Reports() {
   const netIncome = grandTotal - totalExpenses;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
 
+  // Handle row double-click
+  const handleRowDoubleClick = (tx: TransactionWithRelations) => {
+    setSelectedTransaction(tx);
+    setIsModalOpen(true);
+  };
+
+  // Close modal
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setSelectedTransaction(null);
+  };
+
   return (
     <div className="space-y-5">
+      {/* Transaction Detail Modal */}
+      {isModalOpen && selectedTransaction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={closeModal}
+          />
+          
+          {/* Modal Content */}
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden mx-4">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">Transaction Details</h3>
+                <p className="text-sm text-slate-500 font-mono">{selectedTransaction.dr_number || 'No DR #'}</p>
+              </div>
+              <button 
+                onClick={closeModal}
+                className="p-2 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <X size={20} className="text-slate-500" />
+              </button>
+            </div>
+            
+            {/* Body */}
+            <div className="px-6 py-5 overflow-y-auto max-h-[calc(90vh-140px)]">
+              {/* Status & Payment Mode Badges */}
+              <div className="flex items-center gap-3 mb-6">
+                <span className={`inline-flex px-3 py-1 rounded-full text-sm font-semibold border ${
+                  selectedTransaction.status === 'PAID'
+                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                    : 'bg-amber-50 text-amber-600 border-amber-200'
+                }`}>
+                  {selectedTransaction.status}
+                </span>
+                <span className={`inline-flex px-3 py-1 rounded-full text-sm font-semibold ${
+                  selectedTransaction.payment_mode === 'CASH'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : selectedTransaction.payment_mode === 'P.O'
+                      ? 'bg-amber-100 text-amber-700'
+                      : selectedTransaction.payment_mode === 'GCASH'
+                        ? 'bg-blue-100 text-blue-700'
+                        : selectedTransaction.payment_mode === 'BANK_TRANSFER'
+                          ? 'bg-violet-100 text-violet-700'
+                          : selectedTransaction.payment_mode === 'OFFSET'
+                            ? 'bg-pink-100 text-pink-700'
+                            : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {selectedTransaction.payment_mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : selectedTransaction.payment_mode}
+                </span>
+              </div>
+
+              {/* Basic Info Section */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <DetailItem 
+                  label="Transaction Date" 
+                  value={formatDateLabel(selectedTransaction.transaction_date, { 
+                    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
+                  })} 
+                />
+                <DetailItem 
+                  label="DR Number" 
+                  value={selectedTransaction.dr_number || '—'} 
+                  mono 
+                />
+                <DetailItem 
+                  label="Customer" 
+                  value={selectedTransaction.customers?.name ?? '—'} 
+                />
+                <DetailItem 
+                  label="Truck" 
+                  value={selectedTransaction.trucks?.plate_number ?? '—'} 
+                  mono 
+                />
+                <DetailItem 
+                  label="Material Type" 
+                  value={selectedTransaction.material_type || '—'} 
+                />
+              </div>
+
+              <hr className="border-slate-200 my-5" />
+
+              {/* Dimensions Section */}
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Dimensions</h4>
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                <DetailItem label="Length" value={`${selectedTransaction.length_cm ?? 0} cm`} />
+                <DetailItem label="Width" value={`${selectedTransaction.width_cm ?? 0} cm`} />
+                <DetailItem label="Height" value={`${selectedTransaction.height_cm ?? 0} cm`} />
+                <DetailItem 
+                  label="Volume" 
+                  value={`${formatVolume(selectedTransaction.volume_m3 ?? 0)} m³`} 
+                  highlight 
+                />
+              </div>
+
+              <hr className="border-slate-200 my-5" />
+
+              {/* Pricing Section */}
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Pricing Breakdown</h4>
+              <div className="bg-slate-50 rounded-xl p-4 space-y-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Unit Price</span>
+                  <span className="text-slate-700 font-medium tabular-nums">₱{fmt(selectedTransaction.unit_price ?? 0)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Base Amount (Volume × Unit Price)</span>
+                  <span className="text-slate-700 font-medium tabular-nums">₱{fmt(selectedTransaction.amount ?? 0)}</span>
+                </div>
+                
+                <hr className="border-slate-200" />
+                
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">DR Capitol</span>
+                  <span className="text-slate-700 tabular-nums">₱{fmt(selectedTransaction.dr_capitol ?? 0)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Passway</span>
+                  <span className="text-slate-700 tabular-nums">₱{fmt(selectedTransaction.passway ?? 0)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Kulot</span>
+                  <span className="text-slate-700 tabular-nums">₱{fmt(selectedTransaction.kulot ?? 0)}</span>
+                </div>
+                
+                <hr className="border-slate-200" />
+                
+                <div className="flex justify-between text-base font-bold">
+                  <span className="text-slate-700">Total Amount</span>
+                  <span className="text-emerald-600 tabular-nums">₱{fmt(selectedTransaction.total_amount ?? 0)}</span>
+                </div>
+              </div>
+
+              {/* Notes Section */}
+              {selectedTransaction.notes && (
+                <>
+                  <hr className="border-slate-200 my-5" />
+                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Notes</h4>
+                  <p className="text-sm text-slate-600 bg-slate-50 rounded-lg p-3">
+                    {selectedTransaction.notes}
+                  </p>
+                </>
+              )}
+
+              {/* Metadata */}
+              <hr className="border-slate-200 my-5" />
+              <p className="text-xs text-slate-400">
+                Created: {selectedTransaction.created_at 
+                  ? new Date(selectedTransaction.created_at).toLocaleString('en-PH', {
+                      weekday: 'short',
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    }) 
+                  : '—'}
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Reports</h1>
@@ -753,7 +968,7 @@ export default function Reports() {
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-slate-800">Transaction Drill-down</h2>
-                <p className="text-xs text-slate-500 mt-1">Audit the underlying sales records for the selected customer and period.</p>
+                <p className="text-xs text-slate-500 mt-1">Double-click a row to view full transaction details.</p>
               </div>
               <span className="text-xs text-slate-500 font-medium">{customerTransactions.length} record{customerTransactions.length !== 1 ? 's' : ''}</span>
             </div>
@@ -768,30 +983,109 @@ export default function Reports() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-                      <th className="px-4 py-3 text-left">Date</th>
-                      <th className="px-4 py-3 text-left">DR #</th>
-                      <th className="px-4 py-3 text-left">Customer</th>
-                      <th className="px-4 py-3 text-left">Truck</th>
-                      <th className="px-4 py-3 text-right">Volume (m³)</th>
-                      <th className="px-4 py-3 text-right">Total</th>
-                      <th className="px-4 py-3 text-center">Mode</th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {customerTransactions.map(tx => (
-                      <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDateLabel(tx.transaction_date, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
-                        <td className="px-4 py-3 font-mono font-semibold text-slate-700">{tx.dr_number}</td>
-                        <td className="px-4 py-3 text-slate-700">{tx.customers?.name ?? '—'}</td>
-                        <td className="px-4 py-3 text-slate-500 font-mono text-xs">{tx.trucks?.plate_number ?? '—'}</td>
-                        <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{formatVolume(tx.volume_m3 ?? 0)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(tx.total_amount ?? 0)}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                    <th className="px-4 py-3 text-left">Date</th>
+                    <th className="px-4 py-3 text-left">DR #</th>
+                    <th className="px-4 py-3 text-left">Customer</th>
+                    <th className="px-4 py-3 text-left">Truck</th>
+                    <th className="px-4 py-3 text-left">Material</th>
+
+                    <th className="px-4 py-3 text-right">Length (cm)</th>
+                    <th className="px-4 py-3 text-right">Width (cm)</th>
+                    <th className="px-4 py-3 text-right">Height (cm)</th>
+                    <th className="px-4 py-3 text-right">Volume (m³)</th>
+
+                    <th className="px-4 py-3 text-right">Unit Price</th>
+                    <th className="px-4 py-3 text-right">Amount</th>
+                    <th className="px-4 py-3 text-right">DR Capitol</th>
+                    <th className="px-4 py-3 text-right">Passway</th>
+                    <th className="px-4 py-3 text-right">Kulot</th>
+                    <th className="px-4 py-3 text-right">Total</th>
+
+                    <th className="px-4 py-3 text-center">Mode</th>
+                    <th className="px-4 py-3 text-center">Status</th>
+                    <th className="px-4 py-3 text-left">Notes</th>
+                    {/* <th className="px-4 py-3 text-left">Created At</th> */}
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-slate-100">
+                  {customerTransactions.map(tx => (
+                    <tr
+                      key={tx.id}
+                      className="hover:bg-slate-50 transition-colors cursor-pointer"
+                      onDoubleClick={() => handleRowDoubleClick(tx)}
+                      title="Double-click to view details"
+                    >
+                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                        {formatDateLabel(tx.transaction_date, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric'
+                        })}
+                      </td>
+
+                      <td className="px-4 py-3 font-mono font-semibold text-slate-700 whitespace-nowrap">
+                        {tx.dr_number || '—'}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700 whitespace-nowrap">
+                        {tx.customers?.name ?? '—'}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-500 font-mono text-xs whitespace-nowrap">
+                        {tx.trucks?.plate_number ?? '—'}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
+                        {tx.material_type ?? '—'}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        {fmt(tx.length_cm ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        {fmt(tx.width_cm ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        {fmt(tx.height_cm ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">
+                        {formatVolume(tx.volume_m3 ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-700 tabular-nums">
+                        ₱{fmt(tx.unit_price ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-700 font-semibold tabular-nums">
+                        ₱{fmt(tx.amount ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        ₱{fmt(tx.dr_capitol ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        ₱{fmt(tx.passway ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        ₱{fmt(tx.kulot ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
+                        ₱{fmt(tx.total_amount ?? 0)}
+                      </td>
+
+                      <td className="px-4 py-3 text-center">
+                        <span
+                          className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${
                             tx.payment_mode === 'CASH'
                               ? 'bg-emerald-100 text-emerald-700'
                               : tx.payment_mode === 'P.O'
@@ -800,21 +1094,47 @@ export default function Reports() {
                                   ? 'bg-blue-100 text-blue-700'
                                   : tx.payment_mode === 'BANK_TRANSFER'
                                     ? 'bg-violet-100 text-violet-700'
-                                    : 'bg-slate-100 text-slate-600'
-                          }`}>{tx.payment_mode === 'BANK_TRANSFER' ? 'BANK' : tx.payment_mode}</span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                                    : tx.payment_mode === 'OFFSET'
+                                      ? 'bg-pink-100 text-pink-700'
+                                      : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {tx.payment_mode === 'BANK_TRANSFER'
+                            ? 'BANK'
+                            : tx.payment_mode || '—'}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 text-center">
+                        <span
+                          className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap ${
                             tx.status === 'PAID'
                               ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
                               : 'bg-amber-50 text-amber-600 border-amber-200'
-                          }`}>{tx.status}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          }`}
+                        >
+                          {tx.status || '—'}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-500 max-w-[240px] truncate">
+                        {tx.notes || '—'}
+                      </td>
+
+                      {/* <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                        {tx.created_at
+                          ? formatDateLabel(tx.created_at, {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric'
+                            })
+                          : '—'}
+                      </td> */}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             )}
           </div>
         </>

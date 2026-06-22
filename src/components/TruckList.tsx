@@ -222,15 +222,15 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                         <div className="flex-1 min-w-[120px]">
                           <input type="text" value={editForm.driver_name} onChange={e => setEditForm(f => ({ ...f, driver_name: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="Driver" />
                         </div>
-                       <div className="w-20">
+                        <div className="w-20">
                          <input type="number" step="0.01" min="0" value={editForm.length_cm} onChange={e => setEditForm(f => ({ ...f, length_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="L (cm)" />
                         </div>
-                       <div className="w-20">
+                        <div className="w-20">
                          <input type="number" step="0.01" min="0" value={editForm.width_cm} onChange={e => setEditForm(f => ({ ...f, width_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="W (cm)" />
-                       </div>
-                       <div className="w-20">
+                        </div>
+                        <div className="w-20">
                          <input type="number" step="0.01" min="0" value={editForm.height_cm} onChange={e => setEditForm(f => ({ ...f, height_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="H (cm)" />
-                       </div>
+                        </div>
                         <div className="flex items-center gap-1">
                           <button type="submit" disabled={editSaving} className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-70 flex items-center gap-1">
                             {editSaving ? <Loader2 size={12} className="animate-spin" /> : null}Save
@@ -246,9 +246,9 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                     <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
                     <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
                     <td className="px-4 py-3 text-right text-xs text-slate-500 tabular-nums whitespace-nowrap">
-                     {(t.length_cm > 0 || t.width_cm > 0 || t.height_cm > 0)
-                       ? `${t.length_cm} × ${t.width_cm} × ${t.height_cm}`
-                       : '—'}
+                      {(t.length_cm > 0 || t.width_cm > 0 || t.height_cm > 0)
+                        ? `${t.length_cm} × ${t.width_cm} × ${t.height_cm}`
+                        : '—'}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${t.capacity_m3} m³` : '—'}</td>
                     {!readOnly && (

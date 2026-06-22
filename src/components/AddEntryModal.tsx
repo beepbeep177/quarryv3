@@ -136,16 +136,16 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     setProductErrors(errs => errs.map((e, i) => i === index ? { ...e, [key]: undefined } : e));
   };
 
+  const truckDimensions = useCallback((truck: Truck | undefined): Pick<ProductRow, 'length_cm' | 'width_cm' | 'height_cm'> => ({
+    length_cm: truck && truck.length_cm > 0 ? String(truck.length_cm) : '',
+    width_cm: truck && truck.width_cm > 0 ? String(truck.width_cm) : '',
+    height_cm: truck && truck.height_cm > 0 ? String(truck.height_cm) : '',
+  }), []);
+
   const addProduct = () => {
     const defaultPrice = pricingList.length > 0 ? String(pricingList[0].unit_price) : '';
-    // Auto-fill dimensions from selected truck
     const truck = trucks.find(t => t.id === form.truck_id);
-    const newRow: ProductRow = {
-      ...emptyProduct(defaultPrice),
-      length_cm: truck && truck.length_cm > 0 ? String(truck.length_cm) : '',
-      width_cm: truck && truck.width_cm > 0 ? String(truck.width_cm) : '',
-      height_cm: truck && truck.height_cm > 0 ? String(truck.height_cm) : '',
-    };
+    const newRow: ProductRow = { ...emptyProduct(defaultPrice), ...truckDimensions(truck) };
     setForm(f => ({ ...f, products: [...f.products, newRow] }));
     setProductErrors(errs => [...errs, {}]);
   };
@@ -158,14 +158,15 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   // Auto-fill truck dimensions into all product rows when truck changes
   const handleTruckChange = (truckId: string) => {
     const truck = trucks.find(t => t.id === truckId);
+    const dims = truckDimensions(truck);
     setForm(f => ({
       ...f,
       truck_id: truckId,
       products: f.products.map(p => ({
         ...p,
-        length_cm: truck && truck.length_cm > 0 ? String(truck.length_cm) : p.length_cm,
-        width_cm: truck && truck.width_cm > 0 ? String(truck.width_cm) : p.width_cm,
-        height_cm: truck && truck.height_cm > 0 ? String(truck.height_cm) : p.height_cm,
+        length_cm: dims.length_cm || p.length_cm,
+        width_cm: dims.width_cm || p.width_cm,
+        height_cm: dims.height_cm || p.height_cm,
       })),
     }));
     setHeaderErrors(e => ({ ...e, truck_id: undefined }));

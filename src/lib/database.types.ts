@@ -2,7 +2,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH';
+export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER';
 export type TransactionStatus = 'PENDING' | 'PAID';
 
 export type Database = {
@@ -88,17 +88,26 @@ export type Database = {
           plate_number: string;
           driver_name: string;
           capacity_m3: number;
+          length_cm: number;
+          width_cm: number;
+          height_cm: number;
           created_at: string;
         };
         Insert: {
           plate_number: string;
           driver_name?: string;
           capacity_m3?: number;
+          length_cm?: number;
+          width_cm?: number;
+          height_cm?: number;
         };
         Update: {
           plate_number?: string;
           driver_name?: string;
           capacity_m3?: number;
+          length_cm?: number;
+          width_cm?: number;
+          height_cm?: number;
         };
         Relationships: [];
       };

@@ -107,7 +107,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
         </div>
         <div className="flex items-center gap-1.5">
           <Filter size={14} className="text-slate-400" />
-          {(['ALL', 'CASH', 'P.O', 'OFFSET'] as const).map(mode => (
+          {(['ALL', 'CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'] as const).map(mode => (
             <button
               key={mode}
               onClick={() => setModeFilter(mode)}
@@ -116,11 +116,13 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                   ? mode === 'CASH' ? 'bg-emerald-500 text-white'
                     : mode === 'P.O' ? 'bg-amber-500 text-white'
                     : mode === 'OFFSET' ? 'bg-slate-600 text-white'
+                    : mode === 'GCASH' ? 'bg-blue-500 text-white'
+                    : mode === 'BANK_TRANSFER' ? 'bg-violet-500 text-white'
                     : 'bg-slate-800 text-white'
                   : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
               }`}
             >
-              {mode}
+              {mode === 'BANK_TRANSFER' ? 'BANK' : mode}
             </button>
           ))}
         </div>
@@ -237,6 +239,8 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
 function PaymentBadge({ mode }: { mode: string }) {
   if (mode === 'CASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">CASH</span>;
   if (mode === 'P.O') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>;
+  if (mode === 'GCASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">GCASH</span>;
+  if (mode === 'BANK_TRANSFER') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">BANK</span>;
   return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>;
 }
 

@@ -6,6 +6,8 @@ import {
   ArrowUpRight,
   RefreshCw,
   CalendarDays,
+  Smartphone,
+  Building2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
@@ -15,6 +17,8 @@ interface DashboardStats {
   totalVolume: number;
   pendingAR: number;
   transactionCount: number;
+  gcashTotal: number;
+  bankTransferTotal: number;
 }
 
 interface DashboardProps {
@@ -43,6 +47,8 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
     totalVolume: 0,
     pendingAR: 0,
     transactionCount: 0,
+  gcashTotal: 0,
+  bankTransferTotal: 0,
   });
   const [recentTx, setRecentTx] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,12 +76,16 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
       const totalSalesToday = txList.reduce((s, t) => s + (t.total_amount ?? 0), 0);
       const totalVolume = txList.reduce((s, t) => s + (t.volume_m3 ?? 0), 0);
       const pendingAR = (allPending ?? []).reduce((s, t) => s + (t.total_amount ?? 0), 0);
+      const gcashTotal = txList.filter(t => t.payment_mode === 'GCASH').reduce((s, t) => s + (t.total_amount ?? 0), 0);
+      const bankTransferTotal = txList.filter(t => t.payment_mode === 'BANK_TRANSFER').reduce((s, t) => s + (t.total_amount ?? 0), 0);
 
       setStats({
         totalSalesToday,
         totalVolume,
         pendingAR,
         transactionCount: txList.length,
+        gcashTotal,
+        bankTransferTotal,
       });
       setRecentTx(txList.slice(0, 6));
     } finally {
@@ -111,6 +121,24 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
       border: 'border-amber-500/20',
       action: () => onNavigate('customers-ar'),
     },
+    {
+      label: 'GCash Today',
+      value: formatCurrency(stats.gcashTotal),
+      sub: 'GCash payments',
+      icon: <Smartphone size={22} className="text-blue-400" />,
+      bg: 'bg-blue-500/10',
+      border: 'border-blue-500/20',
+      action: () => onNavigate('daily-view'),
+    },
+    {
+      label: 'Bank Transfer Today',
+      value: formatCurrency(stats.bankTransferTotal),
+      sub: 'Bank transfer payments',
+      icon: <Building2 size={22} className="text-violet-400" />,
+      bg: 'bg-violet-500/10',
+      border: 'border-violet-500/20',
+      action: () => onNavigate('daily-view'),
+    },
   ];
 
   return (
@@ -133,7 +161,7 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {statCards.map(card => (
           <div
             key={card.label}
@@ -217,5 +245,7 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
 function PaymentBadge({ mode }: { mode: string }) {
   if (mode === 'CASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">CASH</span>;
   if (mode === 'P.O') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>;
+  if (mode === 'GCASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">GCASH</span>;
+  if (mode === 'BANK_TRANSFER') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">BANK</span>;
   return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>;
 }

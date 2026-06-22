@@ -24,6 +24,8 @@ interface SalesSummary {
   cash: number;
   po: number;
   offset: number;
+  gcash: number;
+  bankTransfer: number;
   total: number;
 }
 
@@ -289,7 +291,7 @@ export default function Reports() {
     transactions.forEach(tx => {
       const bucketStart = getBucketStart(tx.transaction_date, range.salesGrouping);
       if (!bucketMap[bucketStart]) {
-        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, total: 0 };
+        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, gcash: 0, bankTransfer: 0, total: 0 };
       }
 
       bucketMap[bucketStart].count += 1;
@@ -298,6 +300,8 @@ export default function Reports() {
 
       if (tx.payment_mode === 'CASH') bucketMap[bucketStart].cash += tx.total_amount ?? 0;
       else if (tx.payment_mode === 'P.O') bucketMap[bucketStart].po += tx.total_amount ?? 0;
+      else if (tx.payment_mode === 'GCASH') bucketMap[bucketStart].gcash += tx.total_amount ?? 0;
+      else if (tx.payment_mode === 'BANK_TRANSFER') bucketMap[bucketStart].bankTransfer += tx.total_amount ?? 0;
       else bucketMap[bucketStart].offset += tx.total_amount ?? 0;
     });
 
@@ -309,6 +313,8 @@ export default function Reports() {
   const cashTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'CASH').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const poTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'P.O').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const offsetTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'OFFSET').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
+  const gcashTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'GCASH').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
+  const bankTransferTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'BANK_TRANSFER').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
 
   const expenseSummaryList = useMemo(() => {
     const bucketMap: Record<string, ExpenseSummaryRow> = {};
@@ -564,12 +570,14 @@ export default function Reports() {
 
       {activeTab === 'sales' && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {[
               { label: 'Total Revenue', value: `₱${fmt(grandTotal)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'Total Volume', value: `${formatVolume(grandVolume)} m³`, icon: <Layers size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
               { label: 'Cash Sales', value: `₱${fmt(cashTotal)}`, icon: <TrendingUp size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'P.O Receivable', value: `₱${fmt(poTotal)}`, icon: <ReceiptText size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
+              { label: 'GCash Sales', value: `₱${fmt(gcashTotal)}`, icon: <Banknote size={18} className="text-blue-500" />, bg: 'bg-blue-50' },
+              { label: 'Bank Transfer', value: `₱${fmt(bankTransferTotal)}`, icon: <Banknote size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
             ].map(card => (
               <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>
@@ -603,6 +611,8 @@ export default function Reports() {
                       <th className="px-4 py-3 text-right">Cash</th>
                       <th className="px-4 py-3 text-right">P.O</th>
                       <th className="px-4 py-3 text-right">Offset</th>
+                      <th className="px-4 py-3 text-right">GCash</th>
+                      <th className="px-4 py-3 text-right">Bank</th>
                       <th className="px-4 py-3 text-right">Total</th>
                     </tr>
                   </thead>
@@ -617,6 +627,8 @@ export default function Reports() {
                         <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{summary.cash > 0 ? `₱${fmt(summary.cash)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-amber-600 tabular-nums">{summary.po > 0 ? `₱${fmt(summary.po)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums">{summary.offset > 0 ? `₱${fmt(summary.offset)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-blue-600 tabular-nums">{summary.gcash > 0 ? `₱${fmt(summary.gcash)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-violet-600 tabular-nums">{summary.bankTransfer > 0 ? `₱${fmt(summary.bankTransfer)}` : '—'}</td>
                         <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(summary.total)}</td>
                       </tr>
                     ))}
@@ -629,6 +641,8 @@ export default function Reports() {
                       <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">₱{fmt(cashTotal)}</td>
                       <td className="px-4 py-3 text-right text-amber-400 font-semibold tabular-nums">₱{fmt(poTotal)}</td>
                       <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(offsetTotal)}</td>
+                      <td className="px-4 py-3 text-right text-blue-400 font-semibold tabular-nums">₱{fmt(gcashTotal)}</td>
+                      <td className="px-4 py-3 text-right text-violet-400 font-semibold tabular-nums">₱{fmt(bankTransferTotal)}</td>
                       <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandTotal)}</td>
                     </tr>
                   </tfoot>
@@ -743,8 +757,12 @@ export default function Reports() {
                               ? 'bg-emerald-100 text-emerald-700'
                               : tx.payment_mode === 'P.O'
                                 ? 'bg-amber-100 text-amber-700'
-                                : 'bg-slate-100 text-slate-600'
-                          }`}>{tx.payment_mode}</span>
+                                : tx.payment_mode === 'GCASH'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : tx.payment_mode === 'BANK_TRANSFER'
+                                    ? 'bg-violet-100 text-violet-700'
+                                    : 'bg-slate-100 text-slate-600'
+                          }`}>{tx.payment_mode === 'BANK_TRANSFER' ? 'BANK' : tx.payment_mode}</span>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold border ${

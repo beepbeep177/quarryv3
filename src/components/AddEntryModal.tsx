@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, Calculator, Loader2, CheckCircle } from 'lucide-react';
+import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 
@@ -9,11 +9,8 @@ interface AddEntryModalProps {
   transaction?: TransactionWithRelations;
 }
 
-interface FormData {
-  customer_id: string;
-  truck_id: string;
+interface ProductRow {
   dr_number: string;
-  transaction_date: string;
   length_cm: string;
   width_cm: string;
   height_cm: string;
@@ -21,46 +18,61 @@ interface FormData {
   dr_capitol: string;
   passway: string;
   kulot: string;
+}
+
+interface FormData {
+  customer_id: string;
+  truck_id: string;
+  transaction_date: string;
   payment_mode: PaymentMode;
   status: TransactionStatus;
   notes: string;
+  products: ProductRow[];
 }
 
 const todayDate = new Date().toISOString().split('T')[0];
 
+function emptyProduct(defaultPrice = ''): ProductRow {
+  return {
+    dr_number: '',
+    length_cm: '',
+    width_cm: '',
+    height_cm: '',
+    unit_price: defaultPrice,
+    dr_capitol: '0',
+    passway: '0',
+    kulot: '0',
+  };
+}
+
 const EMPTY_FORM: FormData = {
   customer_id: '',
   truck_id: '',
-  dr_number: '',
   transaction_date: todayDate,
-  length_cm: '',
-  width_cm: '',
-  height_cm: '',
-  unit_price: '',
-  dr_capitol: '0',
-  passway: '0',
-  kulot: '0',
   payment_mode: 'CASH',
   status: 'PAID',
   notes: '',
+  products: [emptyProduct()],
 };
 
 function txToForm(tx: TransactionWithRelations): FormData {
   return {
     customer_id: tx.customer_id,
     truck_id: tx.truck_id,
-    dr_number: tx.dr_number,
     transaction_date: tx.transaction_date,
-    length_cm: String(tx.length_cm),
-    width_cm: String(tx.width_cm),
-    height_cm: String(tx.height_cm),
-    unit_price: String(tx.unit_price),
-    dr_capitol: String(tx.dr_capitol),
-    passway: String(tx.passway),
-    kulot: String(tx.kulot),
     payment_mode: tx.payment_mode,
     status: tx.status,
     notes: tx.notes ?? '',
+    products: [{
+      dr_number: tx.dr_number,
+      length_cm: String(tx.length_cm),
+      width_cm: String(tx.width_cm),
+      height_cm: String(tx.height_cm),
+      unit_price: String(tx.unit_price),
+      dr_capitol: String(tx.dr_capitol),
+      passway: String(tx.passway),
+      kulot: String(tx.kulot),
+    }],
   };
 }
 
@@ -73,7 +85,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
+  const [headerErrors, setHeaderErrors] = useState<Partial<Record<'customer_id' | 'truck_id', string>>>({});
+  const [productErrors, setProductErrors] = useState<Partial<Record<keyof ProductRow, string>>[]>([{}]);
 
   useEffect(() => {
     Promise.all([
@@ -90,82 +103,171 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       setPricingList(pricingData);
 
       if (!isEditing && pricingData.length > 0) {
-        setForm(f => ({ ...f, unit_price: String(pricingData[0].unit_price) }));
+        setForm(f => ({
+          ...f,
+          products: f.products.map(p => p.unit_price ? p : { ...p, unit_price: String(pricingData[0].unit_price) }),
+        }));
       }
     });
   }, [isEditing]);
 
   const n = (val: string) => parseFloat(val) || 0;
 
-  const volume = useCallback(() => {
-    const l = n(form.length_cm), w = n(form.width_cm), h = n(form.height_cm);
-    return (l * w * h) / 1_000_000;
-  }, [form.length_cm, form.width_cm, form.height_cm]);
+  const productVolume = useCallback((p: ProductRow) => {
+    return (n(p.length_cm) * n(p.width_cm) * n(p.height_cm)) / 1_000_000;
+  }, []);
 
-  const amount = useCallback(() => volume() * n(form.unit_price), [volume, form.unit_price]);
-  const totalAmount = useCallback(() => amount() + n(form.dr_capitol) + n(form.passway) + n(form.kulot), [amount, form.dr_capitol, form.passway, form.kulot]);
+  const productAmount = useCallback((p: ProductRow) => productVolume(p) * n(p.unit_price), [productVolume]);
 
-  const set = (key: keyof FormData, val: string) => {
+  const productTotal = useCallback((p: ProductRow) => productAmount(p) + n(p.dr_capitol) + n(p.passway) + n(p.kulot), [productAmount]);
+
+  const grandTotal = form.products.reduce((sum, p) => sum + productTotal(p), 0);
+
+  const setHeader = (key: keyof Omit<FormData, 'products'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
-    setErrors(e => ({ ...e, [key]: undefined }));
+    setHeaderErrors(e => ({ ...e, [key]: undefined }));
+  };
+
+  const setProduct = (index: number, key: keyof ProductRow, val: string) => {
+    setForm(f => ({
+      ...f,
+      products: f.products.map((p, i) => i === index ? { ...p, [key]: val } : p),
+    }));
+    setProductErrors(errs => errs.map((e, i) => i === index ? { ...e, [key]: undefined } : e));
+  };
+
+  const truckDimensions = useCallback((truck: Truck | undefined): Pick<ProductRow, 'length_cm' | 'width_cm' | 'height_cm'> => ({
+    length_cm: truck && truck.length_cm > 0 ? String(truck.length_cm) : '',
+    width_cm: truck && truck.width_cm > 0 ? String(truck.width_cm) : '',
+    height_cm: truck && truck.height_cm > 0 ? String(truck.height_cm) : '',
+  }), []);
+
+  const addProduct = () => {
+    const defaultPrice = pricingList.length > 0 ? String(pricingList[0].unit_price) : '';
+    const truck = trucks.find(t => t.id === form.truck_id);
+    const newRow: ProductRow = { ...emptyProduct(defaultPrice), ...truckDimensions(truck) };
+    setForm(f => ({ ...f, products: [...f.products, newRow] }));
+    setProductErrors(errs => [...errs, {}]);
+  };
+
+  const removeProduct = (index: number) => {
+    setForm(f => ({ ...f, products: f.products.filter((_, i) => i !== index) }));
+    setProductErrors(errs => errs.filter((_, i) => i !== index));
+  };
+
+  // Auto-fill truck dimensions into all product rows when truck changes
+  const handleTruckChange = (truckId: string) => {
+    const truck = trucks.find(t => t.id === truckId);
+    const dims = truckDimensions(truck);
+    setForm(f => ({
+      ...f,
+      truck_id: truckId,
+      products: f.products.map(p => ({
+        ...p,
+        length_cm: dims.length_cm || p.length_cm,
+        width_cm: dims.width_cm || p.width_cm,
+        height_cm: dims.height_cm || p.height_cm,
+      })),
+    }));
+    setHeaderErrors(e => ({ ...e, truck_id: undefined }));
   };
 
   function validate() {
-    const errs: Partial<Record<keyof FormData, string>> = {};
-    if (!form.customer_id) errs.customer_id = 'Required';
-    if (!form.truck_id) errs.truck_id = 'Required';
-    if (!form.dr_number.trim()) errs.dr_number = 'Required';
-    if (!form.length_cm || n(form.length_cm) <= 0) errs.length_cm = 'Must be > 0';
-    if (!form.width_cm || n(form.width_cm) <= 0) errs.width_cm = 'Must be > 0';
-    if (!form.height_cm || n(form.height_cm) <= 0) errs.height_cm = 'Must be > 0';
-    if (!form.unit_price || n(form.unit_price) <= 0) errs.unit_price = 'Must be > 0';
-    return errs;
+    let valid = true;
+    const hErrs: Partial<Record<'customer_id' | 'truck_id', string>> = {};
+    if (!form.customer_id) { hErrs.customer_id = 'Required'; valid = false; }
+    if (!form.truck_id) { hErrs.truck_id = 'Required'; valid = false; }
+    setHeaderErrors(hErrs);
+
+    const pErrs = form.products.map(p => {
+      const e: Partial<Record<keyof ProductRow, string>> = {};
+      if (!p.dr_number.trim()) { e.dr_number = 'Required'; valid = false; }
+      if (!p.length_cm || n(p.length_cm) <= 0) { e.length_cm = 'Must be > 0'; valid = false; }
+      if (!p.width_cm || n(p.width_cm) <= 0) { e.width_cm = 'Must be > 0'; valid = false; }
+      if (!p.height_cm || n(p.height_cm) <= 0) { e.height_cm = 'Must be > 0'; valid = false; }
+      if (!p.unit_price || n(p.unit_price) <= 0) { e.unit_price = 'Must be > 0'; valid = false; }
+      return e;
+    });
+    setProductErrors(pErrs);
+
+    return valid;
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+    if (!validate()) return;
 
     setSaving(true);
     setSaveError(null);
 
-    const payload = {
-      transaction_date: form.transaction_date,
-      customer_id: form.customer_id,
-      truck_id: form.truck_id,
-      dr_number: form.dr_number.trim(),
-      length_cm: n(form.length_cm),
-      width_cm: n(form.width_cm),
-      height_cm: n(form.height_cm),
-      unit_price: n(form.unit_price),
-      dr_capitol: n(form.dr_capitol),
-      passway: n(form.passway),
-      kulot: n(form.kulot),
-      payment_mode: form.payment_mode,
-      status: isEditing ? form.status : (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
-      notes: form.notes,
-    };
-
-    const { error } = isEditing
-      ? await supabase.from('transactions').update(payload).eq('id', transaction!.id)
-      : await supabase.from('transactions').insert(payload);
-
-    setSaving(false);
-    if (!error) {
-      setSaved(true);
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 900);
+    if (isEditing) {
+      // Edit mode: single product row
+      const p = form.products[0];
+      const payload = {
+        transaction_date: form.transaction_date,
+        customer_id: form.customer_id,
+        truck_id: form.truck_id,
+        dr_number: p.dr_number.trim(),
+        length_cm: n(p.length_cm),
+        width_cm: n(p.width_cm),
+        height_cm: n(p.height_cm),
+        unit_price: n(p.unit_price),
+        dr_capitol: n(p.dr_capitol),
+        passway: n(p.passway),
+        kulot: n(p.kulot),
+        payment_mode: form.payment_mode,
+        status: form.status,
+        notes: form.notes,
+      };
+      const { error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id);
+      setSaving(false);
+      if (!error) {
+        setSaved(true);
+        setTimeout(() => { onSuccess(); onClose(); }, 900);
+      } else {
+        setSaveError(error.message || 'Failed to save. Please try again.');
+      }
     } else {
-      setSaveError(error.message || 'Failed to save. Please try again.');
+      // Add mode: insert one transaction per product row
+      const rows = form.products.map(p => ({
+        transaction_date: form.transaction_date,
+        customer_id: form.customer_id,
+        truck_id: form.truck_id,
+        dr_number: p.dr_number.trim(),
+        length_cm: n(p.length_cm),
+        width_cm: n(p.width_cm),
+        height_cm: n(p.height_cm),
+        unit_price: n(p.unit_price),
+        dr_capitol: n(p.dr_capitol),
+        passway: n(p.passway),
+        kulot: n(p.kulot),
+        payment_mode: form.payment_mode,
+        status: (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
+        notes: form.notes,
+      }));
+      const { error } = await supabase.from('transactions').insert(rows);
+      setSaving(false);
+      if (!error) {
+        setSaved(true);
+        setTimeout(() => { onSuccess(); onClose(); }, 900);
+      } else {
+        setSaveError(error.message || 'Failed to save. Please try again.');
+      }
     }
   }
 
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH'];
+  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'];
+
+  const paymentModeColor = (mode: PaymentMode, active: boolean) => {
+    if (!active) return 'border-slate-200 text-slate-500 hover:border-slate-300 bg-white';
+    if (mode === 'CASH') return 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200';
+    if (mode === 'P.O') return 'bg-amber-500 border-amber-500 text-white shadow-sm shadow-amber-200';
+    if (mode === 'GCASH') return 'bg-blue-500 border-blue-500 text-white shadow-sm shadow-blue-200';
+    if (mode === 'BANK_TRANSFER') return 'bg-violet-500 border-violet-500 text-white shadow-sm shadow-violet-200';
+    return 'bg-slate-600 border-slate-600 text-white';
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -188,144 +290,40 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
               <input
                 type="date"
                 value={form.transaction_date}
-                onChange={e => set('transaction_date', e.target.value)}
+                onChange={e => setHeader('transaction_date', e.target.value)}
                 className={inputCls(false)}
               />
             </Field>
           )}
+
           {/* Customer & Truck */}
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Customer" error={errors.customer_id}>
-              <select value={form.customer_id} onChange={e => set('customer_id', e.target.value)} className={selectCls(!!errors.customer_id)}>
+            <Field label="Customer" error={headerErrors.customer_id}>
+              <select value={form.customer_id} onChange={e => setHeader('customer_id', e.target.value)} className={selectCls(!!headerErrors.customer_id)}>
                 <option value="">Select customer...</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
-            <Field label="Truck Plate #" error={errors.truck_id}>
-              <select value={form.truck_id} onChange={e => set('truck_id', e.target.value)} className={selectCls(!!errors.truck_id)}>
+            <Field label="Truck Plate #" error={headerErrors.truck_id}>
+              <select value={form.truck_id} onChange={e => handleTruckChange(e.target.value)} className={selectCls(!!headerErrors.truck_id)}>
                 <option value="">Select truck...</option>
                 {trucks.map(t => <option key={t.id} value={t.id}>{t.plate_number} — {t.driver_name}</option>)}
               </select>
             </Field>
           </div>
 
-          {/* DR Number */}
-          <Field label="DR Number" error={errors.dr_number}>
-            <input
-              type="text"
-              placeholder="e.g. DR-2026-001"
-              value={form.dr_number}
-              onChange={e => set('dr_number', e.target.value)}
-              className={inputCls(!!errors.dr_number)}
-            />
-          </Field>
-
-          {/* Dimensions */}
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Dimensions (cm)</p>
-            <div className="grid grid-cols-3 gap-3">
-              {(['length_cm', 'width_cm', 'height_cm'] as const).map((key, i) => (
-                <Field key={key} label={['Length (L)', 'Width (W)', 'Height (H)'][i]} error={errors[key]}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    value={form[key]}
-                    onChange={e => set(key, e.target.value)}
-                    className={inputCls(!!errors[key])}
-                  />
-                </Field>
-              ))}
-            </div>
-          </div>
-
-          {/* Auto-Compute Preview */}
-          <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Calculator size={15} className="text-emerald-500" />
-              <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Auto-Computed Values</span>
-            </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-              <ComputedRow label="Volume (m³)" value={`${volume().toFixed(4)} m³`} highlight />
-              <ComputedRow label="Unit Price" value={`₱${fmt(n(form.unit_price))}`} />
-              <ComputedRow label="Amount" value={`₱${fmt(amount())}`} highlight />
-              <ComputedRow label="Total" value={`₱${fmt(totalAmount())}`} />
-            </div>
-          </div>
-
-          {/* Unit Price */}
-          <Field label="Unit Price (₱/m³)" error={errors.unit_price}>
-            <div className="space-y-2">
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0.00"
-                value={form.unit_price}
-                onChange={e => set('unit_price', e.target.value)}
-                className={inputCls(!!errors.unit_price)}
-              />
-              <div className="flex gap-2 flex-wrap">
-                {pricingList.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => set('unit_price', String(p.unit_price))}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap ${
-                      form.unit_price === String(p.unit_price)
-                        ? 'bg-emerald-500 border-emerald-500 text-white'
-                        : 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600'
-                    }`}
-                  >
-                    {p.material_type} <span className="opacity-75">₱{p.unit_price}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Field>
-
-          {/* Extra Fees */}
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Extra Fees (₱)</p>
-            <div className="grid grid-cols-3 gap-3">
-              {(['dr_capitol', 'passway', 'kulot'] as const).map((key, i) => (
-                <Field key={key} label={['DR Capitol', 'Passway', 'Kulot'][i]}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={form[key]}
-                    onChange={e => set(key, e.target.value)}
-                    className={inputCls(false)}
-                  />
-                </Field>
-              ))}
-            </div>
-          </div>
-
           {/* Payment Mode */}
           <div>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Mode of Payment</p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {paymentModes.map(mode => (
                 <button
                   key={mode}
                   type="button"
-                  onClick={() => set('payment_mode', mode)}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
-                    form.payment_mode === mode
-                      ? mode === 'CASH'
-                        ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200'
-                        : mode === 'P.O'
-                        ? 'bg-amber-500 border-amber-500 text-white shadow-sm shadow-amber-200'
-                        : mode === 'GCASH'
-                        ? 'bg-blue-500 border-blue-500 text-white shadow-sm shadow-blue-200'
-                        : 'bg-slate-600 border-slate-600 text-white'
-                      : 'border-slate-200 text-slate-500 hover:border-slate-300 bg-white'
-                  }`}
+                  onClick={() => setHeader('payment_mode', mode)}
+                  className={`flex-1 min-w-[80px] py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${paymentModeColor(mode, form.payment_mode === mode)}`}
                 >
-                  {mode}
+                  {mode === 'BANK_TRANSFER' ? 'BANK' : mode}
                 </button>
               ))}
             </div>
@@ -340,7 +338,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
                   <button
                     key={s}
                     type="button"
-                    onClick={() => set('status', s)}
+                    onClick={() => setHeader('status', s)}
                     className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
                       form.status === s
                         ? s === 'PAID'
@@ -356,13 +354,50 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
             </div>
           )}
 
+          {/* Product Rows */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                Products ({form.products.length})
+              </p>
+            </div>
+
+            {form.products.map((product, index) => (
+              <ProductSection
+                key={index}
+                index={index}
+                product={product}
+                errors={productErrors[index] ?? {}}
+                pricingList={pricingList}
+                showRemove={!isEditing && form.products.length > 1}
+                onRemove={() => removeProduct(index)}
+                onChange={(key, val) => setProduct(index, key, val)}
+                productVolume={productVolume}
+                productAmount={productAmount}
+                productTotal={productTotal}
+                fmt={fmt}
+              />
+            ))}
+
+            {!isEditing && (
+              <button
+                type="button"
+                onClick={addProduct}
+                className="w-full py-2.5 rounded-xl border-2 border-dashed border-emerald-300 text-emerald-600 text-sm font-semibold hover:border-emerald-400 hover:bg-emerald-50 transition-all flex items-center justify-center gap-2"
+              >
+                <PlusCircle size={16} />
+                Add Another Product
+              </button>
+            )}
+          </div>
+
           {/* Notes */}
           <Field label="Notes (optional)">
             <textarea
               rows={2}
               placeholder="Additional remarks..."
               value={form.notes}
-              onChange={e => set('notes', e.target.value)}
+              onChange={e => setHeader('notes', e.target.value)}
               className={inputCls(false) + ' resize-none'}
             />
           </Field>
@@ -370,7 +405,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           {/* Total Summary */}
           <div className="flex items-center justify-between bg-slate-900 rounded-xl px-5 py-4">
             <span className="text-slate-300 text-sm font-medium">Grand Total</span>
-            <span className="text-2xl font-bold text-emerald-400">₱{fmt(totalAmount())}</span>
+            <span className="text-2xl font-bold text-emerald-400">₱{fmt(grandTotal)}</span>
           </div>
 
           {/* Save Error */}
@@ -395,11 +430,146 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
               ) : saving ? (
                 <><Loader2 size={16} className="animate-spin" /> {isEditing ? 'Updating...' : 'Saving...'}</>
               ) : (
-                isEditing ? 'Update Entry' : 'Save Entry'
+                isEditing ? 'Update Entry' : `Save ${form.products.length > 1 ? `${form.products.length} Entries` : 'Entry'}`
               )}
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+interface ProductSectionProps {
+  index: number;
+  product: ProductRow;
+  errors: Partial<Record<keyof ProductRow, string>>;
+  pricingList: Pricing[];
+  showRemove: boolean;
+  onRemove: () => void;
+  onChange: (key: keyof ProductRow, val: string) => void;
+  productVolume: (p: ProductRow) => number;
+  productAmount: (p: ProductRow) => number;
+  productTotal: (p: ProductRow) => number;
+  fmt: (v: number) => string;
+}
+
+function ProductSection({ index, product, errors, pricingList, showRemove, onRemove, onChange, productVolume, productAmount, productTotal, fmt }: ProductSectionProps) {
+  const vol = productVolume(product);
+  const amt = productAmount(product);
+  const total = productTotal(product);
+  const n = (val: string) => parseFloat(val) || 0;
+
+  return (
+    <div className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/50">
+      {/* Product header */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Product {index + 1}</span>
+        {showRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors"
+          >
+            <Trash2 size={13} />
+            Remove
+          </button>
+        )}
+      </div>
+
+      {/* DR Number */}
+      <Field label="DR Number" error={errors.dr_number}>
+        <input
+          type="text"
+          placeholder="e.g. DR-2026-001"
+          value={product.dr_number}
+          onChange={e => onChange('dr_number', e.target.value)}
+          className={inputCls(!!errors.dr_number)}
+        />
+      </Field>
+
+      {/* Dimensions */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Dimensions (cm)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {(['length_cm', 'width_cm', 'height_cm'] as const).map((key, i) => (
+            <Field key={key} label={['Length (L)', 'Width (W)', 'Height (H)'][i]} error={errors[key]}>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                value={product[key]}
+                onChange={e => onChange(key, e.target.value)}
+                className={inputCls(!!errors[key])}
+              />
+            </Field>
+          ))}
+        </div>
+      </div>
+
+      {/* Auto-Compute Preview */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calculator size={15} className="text-emerald-500" />
+          <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Auto-Computed Values</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+          <ComputedRow label="Volume (m³)" value={`${vol.toFixed(4)} m³`} highlight />
+          <ComputedRow label="Unit Price" value={`₱${fmt(n(product.unit_price))}`} />
+          <ComputedRow label="Amount" value={`₱${fmt(amt)}`} highlight />
+          <ComputedRow label="Total" value={`₱${fmt(total)}`} />
+        </div>
+      </div>
+
+      {/* Unit Price */}
+      <Field label="Unit Price (₱/m³)" error={errors.unit_price}>
+        <div className="space-y-2">
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="0.00"
+            value={product.unit_price}
+            onChange={e => onChange('unit_price', e.target.value)}
+            className={inputCls(!!errors.unit_price)}
+          />
+          <div className="flex gap-2 flex-wrap">
+            {pricingList.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onChange('unit_price', String(p.unit_price))}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap ${
+                  product.unit_price === String(p.unit_price)
+                    ? 'bg-emerald-500 border-emerald-500 text-white'
+                    : 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600'
+                }`}
+              >
+                {p.material_type} <span className="opacity-75">₱{p.unit_price}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Field>
+
+      {/* Extra Fees */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Extra Fees (₱)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {(['dr_capitol', 'passway', 'kulot'] as const).map((key, i) => (
+            <Field key={key} label={['DR Capitol', 'Passway', 'Kulot'][i]}>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={product[key]}
+                onChange={e => onChange(key, e.target.value)}
+                className={inputCls(false)}
+              />
+            </Field>
+          ))}
+        </div>
       </div>
     </div>
   );

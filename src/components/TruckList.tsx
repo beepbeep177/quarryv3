@@ -9,11 +9,11 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ plate_number: '', driver_name: '', capacity_m3: '' });
+  const [form, setForm] = useState({ plate_number: '', driver_name: '', length_cm: '', width_cm: '', height_cm: '' });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ plate_number?: string }>({});
   const [editingTruck, setEditingTruck] = useState<TruckType | null>(null);
-  const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', capacity_m3: '' });
+  const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', length_cm: '', width_cm: '', height_cm: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -31,15 +31,21 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
     e.preventDefault();
     if (!form.plate_number.trim()) { setErrors({ plate_number: 'Required' }); return; }
     setSaving(true);
+    const l = parseFloat(form.length_cm) || 0;
+    const w = parseFloat(form.width_cm) || 0;
+    const h = parseFloat(form.height_cm) || 0;
     const { data } = await supabase.from('trucks').insert({
       plate_number: form.plate_number.trim().toUpperCase(),
       driver_name: form.driver_name,
-      capacity_m3: parseFloat(form.capacity_m3) || 0,
+      length_cm: l,
+      width_cm: w,
+      height_cm: h,
+      capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
     }).select().maybeSingle();
     setSaving(false);
     if (data) {
       setTrucks(prev => [...prev, data as TruckType].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
-      setForm({ plate_number: '', driver_name: '', capacity_m3: '' });
+      setForm({ plate_number: '', driver_name: '', length_cm: '', width_cm: '', height_cm: '' });
       setShowForm(false);
       setErrors({});
     }
@@ -47,7 +53,13 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
 
   function startEdit(t: TruckType) {
     setEditingTruck(t);
-    setEditForm({ plate_number: t.plate_number, driver_name: t.driver_name ?? '', capacity_m3: t.capacity_m3 > 0 ? String(t.capacity_m3) : '' });
+    setEditForm({
+      plate_number: t.plate_number,
+      driver_name: t.driver_name ?? '',
+      length_cm: t.length_cm > 0 ? String(t.length_cm) : '',
+      width_cm: t.width_cm > 0 ? String(t.width_cm) : '',
+      height_cm: t.height_cm > 0 ? String(t.height_cm) : '',
+    });
     setEditErrors({});
   }
 
@@ -60,12 +72,18 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
     e.preventDefault();
     if (!editForm.plate_number.trim()) { setEditErrors({ plate_number: 'Required' }); return; }
     setEditSaving(true);
+    const l = parseFloat(editForm.length_cm) || 0;
+    const w = parseFloat(editForm.width_cm) || 0;
+    const h = parseFloat(editForm.height_cm) || 0;
     const { data } = await supabase
       .from('trucks')
       .update({
         plate_number: editForm.plate_number.trim().toUpperCase(),
         driver_name: editForm.driver_name,
-        capacity_m3: parseFloat(editForm.capacity_m3) || 0,
+        length_cm: l,
+        width_cm: w,
+        height_cm: h,
+        capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
       })
       .eq('id', editingTruck!.id)
       .select()
@@ -115,7 +133,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
             <h2 className="font-semibold text-slate-800">New Truck</h2>
             <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
           </div>
-          <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <div>
               <label className="text-xs font-semibold text-slate-500 mb-1 block">Plate Number *</label>
               <input type="text" value={form.plate_number} onChange={e => { setForm(f => ({ ...f, plate_number: e.target.value })); setErrors({}); }} className={`w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 uppercase ${errors.plate_number ? 'border-red-300 focus:ring-red-200' : 'border-slate-200 focus:ring-emerald-200 focus:border-emerald-400'}`} placeholder="ABC-1234" />
@@ -126,15 +144,31 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
               <input type="text" value={form.driver_name} onChange={e => setForm(f => ({ ...f, driver_name: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="Juan Dela Cruz" />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 mb-1 block">Capacity (m³)</label>
-              <input type="number" step="0.1" min="0" value={form.capacity_m3} onChange={e => setForm(f => ({ ...f, capacity_m3: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="12.5" />
+              <label className="text-xs font-semibold text-slate-500 mb-1 block">Length (cm)</label>
+              <input type="number" step="0.01" min="0" value={form.length_cm} onChange={e => setForm(f => ({ ...f, length_cm: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="0.00" />
             </div>
-            <div className="md:col-span-3 flex justify-end gap-2">
-              <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50">Cancel</button>
-              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70 flex items-center gap-2">
-                {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-                Save Truck
-              </button>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 mb-1 block">Width (cm)</label>
+              <input type="number" step="0.01" min="0" value={form.width_cm} onChange={e => setForm(f => ({ ...f, width_cm: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="0.00" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 mb-1 block">Height (cm)</label>
+              <input type="number" step="0.01" min="0" value={form.height_cm} onChange={e => setForm(f => ({ ...f, height_cm: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="0.00" />
+            </div>
+            <div className="md:col-span-5 flex items-center justify-between">
+              <p className="text-xs text-slate-500">
+                Capacity:{' '}
+                <span className="font-semibold text-emerald-600">
+                  {(((parseFloat(form.length_cm) || 0) * (parseFloat(form.width_cm) || 0) * (parseFloat(form.height_cm) || 0)) / 1_000_000).toFixed(4)} m³
+                </span>
+              </p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70 flex items-center gap-2">
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Save Truck
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -157,6 +191,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                 <th className="px-5 py-3 text-left">#</th>
                 <th className="px-4 py-3 text-left">Plate Number</th>
                 <th className="px-4 py-3 text-left">Driver</th>
+                <th className="px-4 py-3 text-right">Dimensions (cm)</th>
                 <th className="px-4 py-3 text-right">Capacity (m³)</th>
                 {!readOnly && <th className="px-4 py-3 text-center w-20">Actions</th>}
               </tr>
@@ -164,7 +199,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={readOnly ? 4 : 5} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={readOnly ? 5 : 6} className="px-4 py-12 text-center text-slate-400">
                     <Truck size={28} className="mx-auto mb-2 text-slate-300" />
                     No trucks found
                   </td>
@@ -173,7 +208,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                 editingTruck?.id === t.id ? (
                   <tr key={t.id} className="bg-blue-50/50">
                     <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
-                    <td className="px-4 py-2" colSpan={4}>
+                    <td className="px-4 py-2" colSpan={5}>
                       <form onSubmit={handleEditSubmit} className="flex items-center gap-2 flex-wrap">
                         <div className="flex-1 min-w-[120px]">
                           <input
@@ -187,8 +222,14 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                         <div className="flex-1 min-w-[120px]">
                           <input type="text" value={editForm.driver_name} onChange={e => setEditForm(f => ({ ...f, driver_name: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="Driver" />
                         </div>
-                        <div className="w-24">
-                          <input type="number" step="0.1" min="0" value={editForm.capacity_m3} onChange={e => setEditForm(f => ({ ...f, capacity_m3: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="m³" />
+                        <div className="w-20">
+                         <input type="number" step="0.01" min="0" value={editForm.length_cm} onChange={e => setEditForm(f => ({ ...f, length_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="L (cm)" />
+                        </div>
+                        <div className="w-20">
+                         <input type="number" step="0.01" min="0" value={editForm.width_cm} onChange={e => setEditForm(f => ({ ...f, width_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="W (cm)" />
+                        </div>
+                        <div className="w-20">
+                         <input type="number" step="0.01" min="0" value={editForm.height_cm} onChange={e => setEditForm(f => ({ ...f, height_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="H (cm)" />
                         </div>
                         <div className="flex items-center gap-1">
                           <button type="submit" disabled={editSaving} className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-70 flex items-center gap-1">
@@ -204,6 +245,11 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                     <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
                     <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
                     <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
+                    <td className="px-4 py-3 text-right text-xs text-slate-500 tabular-nums whitespace-nowrap">
+                      {(t.length_cm > 0 || t.width_cm > 0 || t.height_cm > 0)
+                        ? `${t.length_cm} × ${t.width_cm} × ${t.height_cm}`
+                        : '—'}
+                    </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${t.capacity_m3} m³` : '—'}</td>
                     {!readOnly && (
                       <td className="px-4 py-3 text-center">

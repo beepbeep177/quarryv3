@@ -148,6 +148,7 @@ export type Database = {
           passway: number;
           kulot: number;
           total_amount: number;
+          material_type: string;
           payment_mode: PaymentMode;
           status: TransactionStatus;
           notes: string;
@@ -165,6 +166,7 @@ export type Database = {
           dr_capitol?: number;
           passway?: number;
           kulot?: number;
+          material_type?: string;
           payment_mode?: PaymentMode;
           status?: TransactionStatus;
           notes?: string;
@@ -181,6 +183,7 @@ export type Database = {
           dr_capitol?: number;
           passway?: number;
           kulot?: number;
+          material_type?: string;
           payment_mode?: PaymentMode;
           status?: TransactionStatus;
           notes?: string;

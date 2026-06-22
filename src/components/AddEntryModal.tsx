@@ -11,6 +11,7 @@ interface AddEntryModalProps {
 
 interface ProductRow {
   dr_number: string;
+  material_type: string;
   length_cm: string;
   width_cm: string;
   height_cm: string;
@@ -32,9 +33,10 @@ interface FormData {
 
 const todayDate = new Date().toISOString().split('T')[0];
 
-function emptyProduct(defaultPrice = ''): ProductRow {
+function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
   return {
     dr_number: '',
+    material_type: defaultMaterial,
     length_cm: '',
     width_cm: '',
     height_cm: '',
@@ -65,6 +67,7 @@ function txToForm(tx: TransactionWithRelations): FormData {
     notes: tx.notes ?? '',
     products: [{
       dr_number: tx.dr_number,
+      material_type: tx.material_type ?? '',
       length_cm: String(tx.length_cm),
       width_cm: String(tx.width_cm),
       height_cm: String(tx.height_cm),
@@ -105,7 +108,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       if (!isEditing && pricingData.length > 0) {
         setForm(f => ({
           ...f,
-          products: f.products.map(p => p.unit_price ? p : { ...p, unit_price: String(pricingData[0].unit_price) }),
+          products: f.products.map(p => p.unit_price ? p : {
+            ...p,
+            unit_price: String(pricingData[0].unit_price),
+            material_type: p.material_type || pricingData[0].material_type,
+          }),
         }));
       }
     });
@@ -144,8 +151,9 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
   const addProduct = () => {
     const defaultPrice = pricingList.length > 0 ? String(pricingList[0].unit_price) : '';
+    const defaultMaterial = pricingList.length > 0 ? pricingList[0].material_type : '';
     const truck = trucks.find(t => t.id === form.truck_id);
-    const newRow: ProductRow = { ...emptyProduct(defaultPrice), ...truckDimensions(truck) };
+    const newRow: ProductRow = { ...emptyProduct(defaultPrice, defaultMaterial), ...truckDimensions(truck) };
     setForm(f => ({ ...f, products: [...f.products, newRow] }));
     setProductErrors(errs => [...errs, {}]);
   };
@@ -208,6 +216,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
         customer_id: form.customer_id,
         truck_id: form.truck_id,
         dr_number: p.dr_number.trim(),
+        material_type: p.material_type || 'Crushed Stone',
         length_cm: n(p.length_cm),
         width_cm: n(p.width_cm),
         height_cm: n(p.height_cm),
@@ -234,6 +243,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
         customer_id: form.customer_id,
         truck_id: form.truck_id,
         dr_number: p.dr_number.trim(),
+        material_type: p.material_type || 'Crushed Stone',
         length_cm: n(p.length_cm),
         width_cm: n(p.width_cm),
         height_cm: n(p.height_cm),
@@ -539,9 +549,12 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
               <button
                 key={p.id}
                 type="button"
-                onClick={() => onChange('unit_price', String(p.unit_price))}
+                onClick={() => {
+                  onChange('unit_price', String(p.unit_price));
+                  onChange('material_type', p.material_type);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap ${
-                  product.unit_price === String(p.unit_price)
+                  product.material_type === p.material_type
                     ? 'bg-emerald-500 border-emerald-500 text-white'
                     : 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600'
                 }`}

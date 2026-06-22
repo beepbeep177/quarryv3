@@ -11,7 +11,7 @@ import {
   ReceiptText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Customer, ExpenseWithCategory, TransactionWithRelations } from '../lib/database.types';
+import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
 
 type ReportTab = 'sales' | 'customers' | 'expenses' | 'net';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
@@ -213,6 +213,8 @@ export default function Reports() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [customerId, setCustomerId] = useState<'ALL' | string>('ALL');
+  const [paymentModeFilter, setPaymentModeFilter] = useState<'ALL' | PaymentMode>('ALL');
+  const [materialTypeFilter, setMaterialTypeFilter] = useState<'ALL' | string>('ALL');
   const [customerGrouping, setCustomerGrouping] = useState<Grouping>('WEEK');
   const [expenseGrouping, setExpenseGrouping] = useState<Grouping>('DAY');
   const [netGrouping, setNetGrouping] = useState<Grouping>('WEEK');
@@ -347,10 +349,23 @@ export default function Reports() {
   const topExpenseCategory = expenseCategoryTotals[0]?.[0] ?? '—';
   const topExpenseCategoryAmount = expenseCategoryTotals[0]?.[1] ?? 0;
 
+  const materialTypeOptions = useMemo(() => {
+    const types = new Set(transactions.map(tx => tx.material_type).filter(Boolean));
+    return Array.from(types).sort();
+  }, [transactions]);
+
   const customerTransactions = useMemo(() => {
-    const filtered = customerId === 'ALL'
+    let filtered = customerId === 'ALL'
       ? transactions
       : transactions.filter(tx => tx.customer_id === customerId);
+
+    if (paymentModeFilter !== 'ALL') {
+      filtered = filtered.filter(tx => tx.payment_mode === paymentModeFilter);
+    }
+
+    if (materialTypeFilter !== 'ALL') {
+      filtered = filtered.filter(tx => tx.material_type === materialTypeFilter);
+    }
 
     return [...filtered].sort((a, b) => {
       if (a.transaction_date === b.transaction_date) {
@@ -358,7 +373,7 @@ export default function Reports() {
       }
       return b.transaction_date.localeCompare(a.transaction_date);
     });
-  }, [transactions, customerId]);
+  }, [transactions, customerId, paymentModeFilter, materialTypeFilter]);
 
   const customerSummaryList = useMemo(() => {
     const bucketMap: Record<string, CustomerSalesSummary> = {};
@@ -502,6 +517,30 @@ export default function Reports() {
                   <option key={customer.id} value={customer.id}>{customer.name}</option>
                 ))}
               </select>
+              <select
+                value={paymentModeFilter}
+                onChange={e => setPaymentModeFilter(e.target.value as 'ALL' | PaymentMode)}
+                className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200"
+              >
+                <option value="ALL">All Payment Modes</option>
+                <option value="CASH">Cash</option>
+                <option value="P.O">P.O</option>
+                <option value="GCASH">GCash</option>
+                <option value="BANK_TRANSFER">Bank Transfer</option>
+                <option value="OFFSET">Offset</option>
+              </select>
+              {materialTypeOptions.length > 0 && (
+                <select
+                  value={materialTypeFilter}
+                  onChange={e => setMaterialTypeFilter(e.target.value)}
+                  className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                >
+                  <option value="ALL">All Products</option>
+                  {materialTypeOptions.map(mt => (
+                    <option key={mt} value={mt}>{mt}</option>
+                  ))}
+                </select>
+              )}
               <div className="flex items-center gap-1.5">
                 {(['DAY', 'WEEK', 'MONTH'] as const).map(group => (
                   <button

@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { UserPlus, Search, RefreshCw, Users, Building2, Phone, MapPin, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 12;
 
 export default function CustomersList({ readOnly = false }: { readOnly?: boolean }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -17,8 +21,10 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ name?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchCustomers(); }, []);
+  useEffect(() => { setPage(1); }, [search]);
 
   async function fetchCustomers() {
     setLoading(true);
@@ -83,6 +89,9 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
   const filtered = customers.filter(c =>
     !search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.contact ?? '').includes(search)
   );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedCustomers = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
@@ -159,7 +168,7 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map(c => (
+          {pagedCustomers.map(c => (
             <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-shadow group">
               {editingCustomer?.id === c.id ? (
                 <form onSubmit={handleEditSubmit} className="space-y-3">
@@ -236,6 +245,9 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
               )}
             </div>
           ))}
+          <div className="md:col-span-2 xl:col-span-3">
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
+          </div>
         </div>
       )}
     </div>

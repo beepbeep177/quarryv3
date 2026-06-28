@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DollarSign, PlusCircle, RefreshCw, X, Loader2, Tag, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Pricing } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 9;
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -20,8 +24,10 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ material_type?: string; unit_price?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchPricing(); }, []);
+  useEffect(() => { setPage(1); }, [pricingList.length]);
 
   async function fetchPricing() {
     setLoading(true);
@@ -97,6 +103,10 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
     setDeletingId(null);
   }
 
+  const totalPages = Math.max(1, Math.ceil(pricingList.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedPricing = useMemo(() => paginate(pricingList, currentPage, PAGE_SIZE), [pricingList, currentPage]);
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -157,7 +167,7 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
               <DollarSign size={32} className="text-slate-300 mx-auto mb-3" />
               <p className="text-slate-500 text-sm">No pricing entries</p>
             </div>
-          ) : pricingList.map(p => (
+          ) : pagedPricing.map(p => (
             <div key={p.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow group">
               {editingPricing?.id === p.id ? (
                 <form onSubmit={handleEditSubmit} className="space-y-3">
@@ -215,6 +225,9 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
               )}
             </div>
           ))}
+          <div className="md:col-span-2 xl:col-span-3">
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={pricingList.length} onPageChange={setPage} />
+          </div>
         </div>
       )}
     </div>

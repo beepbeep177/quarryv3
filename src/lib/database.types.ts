@@ -1,6 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type UserRole = 'admin' | 'manager' | 'operator';
+export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
 export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER';
 export type TransactionStatus = 'PENDING' | 'PAID';

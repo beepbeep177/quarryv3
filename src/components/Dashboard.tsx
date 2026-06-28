@@ -8,6 +8,7 @@ import {
   CalendarDays,
   Smartphone,
   Building2,
+  Package,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
@@ -23,8 +24,16 @@ interface DashboardStats {
 
 interface DashboardProps {
   onNavigate: (section: 'daily-add' | 'daily-view' | 'customers-ar') => void;
+  onOpenProductReport: () => void;
   refreshKey: number;
   canManageRecords: boolean;
+}
+
+interface ProductSalesSummary {
+  materialType: string;
+  quantity: number;
+  volume: number;
+  revenue: number;
 }
 
 const today = new Date().toISOString().split('T')[0];
@@ -41,7 +50,48 @@ function formatVolume(val: number) {
   return val.toFixed(2);
 }
 
-export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: DashboardProps) {
+const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
+
+function PieChart({ data }: { data: { label: string; value: number }[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const gradient = total > 0
+    ? data.map((item, index) => {
+        const start = cursor;
+        const end = cursor + (item.value / total) * 100;
+        cursor = end;
+        return `${chartColors[index % chartColors.length]} ${start}% ${end}%`;
+      }).join(', ')
+    : '#e2e8f0 0% 100%';
+
+  return (
+    <div className="flex items-center gap-4 flex-wrap">
+      <div className="relative w-32 h-32 rounded-full shrink-0" style={{ background: `conic-gradient(${gradient})` }}>
+        <div className="absolute inset-7 rounded-full bg-white flex items-center justify-center text-center">
+          <div>
+            <p className="text-lg font-bold text-slate-800 tabular-nums">{total}</p>
+            <p className="text-[11px] text-slate-500">sold</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-2 min-w-44 flex-1">
+        {data.length === 0 ? (
+          <p className="text-sm text-slate-500">No data available</p>
+        ) : data.map((item, index) => (
+          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2 min-w-0">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: chartColors[index % chartColors.length] }} />
+              <span className="text-slate-600 truncate">{item.label}</span>
+            </span>
+            <span className="font-semibold text-slate-800 tabular-nums">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function Dashboard({ onNavigate, onOpenProductReport, refreshKey, canManageRecords }: DashboardProps) {
   const [stats, setStats] = useState<DashboardStats>({
     totalSalesToday: 0,
     totalVolume: 0,
@@ -51,6 +101,7 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
   bankTransferTotal: 0,
   });
   const [recentTx, setRecentTx] = useState<TransactionWithRelations[]>([]);
+  const [productSales, setProductSales] = useState<ProductSalesSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -88,10 +139,36 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
         bankTransferTotal,
       });
       setRecentTx(txList.slice(0, 6));
+      const productMap: Record<string, ProductSalesSummary> = {};
+      txList.forEach(tx => {
+        const materialType = tx.material_type || 'Unspecified';
+        if (!productMap[materialType]) {
+          productMap[materialType] = { materialType, quantity: 0, volume: 0, revenue: 0 };
+        }
+        productMap[materialType].quantity += 1;
+        productMap[materialType].volume += tx.volume_m3 ?? 0;
+        productMap[materialType].revenue += tx.total_amount ?? 0;
+      });
+      setProductSales(Object.values(productMap).sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue || a.materialType.localeCompare(b.materialType)));
     } finally {
       setLoading(false);
     }
   }
+
+  const productTotals = {
+    quantity: productSales.reduce((sum, product) => sum + product.quantity, 0),
+    volume: productSales.reduce((sum, product) => sum + product.volume, 0),
+    revenue: productSales.reduce((sum, product) => sum + product.revenue, 0),
+  };
+
+  const productChartData = (() => {
+    const top = productSales.slice(0, 5);
+    const others = productSales.slice(5);
+    const rows = top.map(product => ({ label: product.materialType, value: product.quantity }));
+    const otherQuantity = others.reduce((sum, product) => sum + product.quantity, 0);
+    if (otherQuantity > 0) rows.push({ label: 'Others', value: otherQuantity });
+    return rows;
+  })();
 
   const statCards = [
     {
@@ -179,6 +256,54 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
             <p className="text-xs text-slate-400 mt-1">{card.sub}</p>
           </div>
         ))}
+      </div>
+
+      <div
+        onClick={onOpenProductReport}
+        className="bg-white rounded-xl border border-slate-200 p-5 cursor-pointer hover:shadow-md transition-shadow group"
+      >
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <Package size={22} className="text-emerald-500" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-slate-800">Product Sales Performance</h2>
+              <p className="text-xs text-slate-500 mt-1">Today by quantity sold</p>
+            </div>
+          </div>
+          <ArrowUpRight size={16} className="text-slate-300 group-hover:text-slate-500 transition-colors shrink-0" />
+        </div>
+
+        {loading ? (
+          <div className="py-12 flex items-center justify-center text-slate-400 text-sm">
+            <RefreshCw size={16} className="animate-spin mr-2" /> Loading product sales...
+          </div>
+        ) : productSales.length === 0 ? (
+          <div className="py-12 text-center">
+            <Package size={32} className="text-slate-300 mx-auto mb-3" />
+            <p className="text-slate-500 text-sm font-medium">No data available</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 items-center">
+            <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { label: 'Top Product', value: productSales[0]?.materialType ?? '—' },
+                { label: 'Quantity Sold', value: String(productTotals.quantity) },
+                { label: 'Products Sold', value: String(productSales.length) },
+                { label: 'Revenue', value: formatCurrency(productTotals.revenue) },
+              ].map(item => (
+                <div key={item.label} className="rounded-lg bg-slate-50 border border-slate-100 px-4 py-3">
+                  <p className="text-xs text-slate-500 font-medium">{item.label}</p>
+                  <p className="text-lg font-bold text-slate-800 mt-1 truncate tabular-nums">{item.value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="lg:col-span-2">
+              <PieChart data={productChartData} />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200">

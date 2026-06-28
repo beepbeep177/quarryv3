@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Truck, PlusCircle, Search, RefreshCw, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, Truck as TruckType } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 10;
 
 type TruckWithCustomer = TruckType & {
   customers?: Customer | null;
@@ -26,8 +30,10 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchTrucks(); }, []);
+  useEffect(() => { setPage(1); }, [search]);
 
   async function fetchTrucks() {
     setLoading(true);
@@ -129,6 +135,9 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
       (t.driver_name ?? '').toLowerCase().includes(q) ||
       (t.customers?.name ?? '').toLowerCase().includes(q);
   });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedTrucks = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
@@ -234,10 +243,10 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                     No trucks found
                   </td>
                 </tr>
-              ) : filtered.map((t, i) => (
+              ) : pagedTrucks.map((t, i) => (
                 editingTruck?.id === t.id ? (
                   <tr key={t.id} className="bg-blue-50/50">
-                    <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
+                    <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-4 py-2" colSpan={6}>
                       <form onSubmit={handleEditSubmit} className="flex items-center gap-2 flex-wrap">
                         <div className="flex-1 min-w-[120px]">
@@ -280,7 +289,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                   </tr>
                 ) : (
                   <tr key={t.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-5 py-3 text-slate-400 text-xs">{i + 1}</td>
+                    <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
                     <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
                     <td className="px-4 py-3 text-slate-600">{t.customers?.name ?? 'Unassigned'}</td>
@@ -307,6 +316,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
               ))}
             </tbody>
           </table>
+          <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
         </div>
       )}
     </div>

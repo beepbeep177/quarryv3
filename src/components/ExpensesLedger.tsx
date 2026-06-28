@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, Trash2, Droplet, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { ExpenseWithCategory } from '../lib/database.types';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 10;
 
 interface ExpensesLedgerProps {
   refreshKey: number;
@@ -27,10 +31,12 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     fetchExpenses();
   }, [refreshKey]);
+  useEffect(() => { setPage(1); }, [search, refreshKey]);
 
   async function fetchExpenses() {
     setLoading(true);
@@ -57,6 +63,9 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
       e.payee_supplier.toLowerCase().includes(q) ||
       e.description.toLowerCase().includes(q);
   });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedExpenses = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   const catColor = (catName?: string) => {
     return categoryColors[catName ?? 'Miscellaneous'] || categoryColors.Miscellaneous;
@@ -112,11 +121,11 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((exp, idx) => {
+                {pagedExpenses.map((exp, idx) => {
                   const colors = catColor(exp.expense_categories?.name);
                   return (
                     <tr key={exp.id} className="hover:bg-slate-50 transition-colors group">
-                      <td className="px-5 py-3 text-slate-400 text-xs">{idx + 1}</td>
+                      <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
                           <Calendar size={13} className="text-slate-400" />
@@ -163,6 +172,7 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
                 })}
               </tbody>
             </table>
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
           </div>
         )}
       </div>

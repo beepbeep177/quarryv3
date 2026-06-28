@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   RefreshCw,
   PlusCircle,
@@ -11,6 +11,10 @@ import {
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 10;
 
 interface DailyLedgerProps {
   onAddEntry: () => void;
@@ -35,8 +39,10 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
   const [search, setSearch] = useState('');
   const [modeFilter, setModeFilter] = useState<PaymentMode | 'ALL'>('ALL');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchTransactions(); }, [refreshKey]);
+  useEffect(() => { setPage(1); }, [search, modeFilter, refreshKey]);
 
   async function fetchTransactions() {
     setLoading(true);
@@ -75,6 +81,9 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
     }),
     { volume: 0, amount: 0 }
   );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedTransactions = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
@@ -172,11 +181,11 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filtered.map((tx, idx) => {
+                  {pagedTransactions.map((tx, idx) => {
                     const extras = (tx.dr_capitol ?? 0) + (tx.passway ?? 0) + (tx.kulot ?? 0);
                     return (
                       <tr key={tx.id} className="hover:bg-slate-50 transition-colors group">
-                        <td className="px-4 py-3 text-slate-400 text-xs">{idx + 1}</td>
+                        <td className="px-4 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                         <td className="px-4 py-3 font-mono font-semibold text-slate-700">{tx.dr_number}</td>
                         <td className="px-4 py-3 text-slate-700 max-w-36">
                           <p className="truncate">{tx.customers?.name ?? '—'}</p>
@@ -219,6 +228,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                 </tbody>
               </table>
             </div>
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
 
             <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-sm">
               <span className="text-slate-400 font-medium">{filtered.length} entries</span>

@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, ShieldCheck, History, Loader2, UserPlus, Eye, EyeOff, Copy, CheckCheck, RefreshCcw } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { AppUser, AuditLog, UserRole } from '../lib/database.types';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const USERS_PAGE_SIZE = 8;
+const AUDIT_PAGE_SIZE = 10;
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -57,6 +62,8 @@ export default function AccessControl() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [usersPage, setUsersPage] = useState(1);
+  const [auditPage, setAuditPage] = useState(1);
 
   // Create account state
   const [newEmail, setNewEmail] = useState('');
@@ -103,6 +110,13 @@ export default function AccessControl() {
     }
     setSavingUserId(null);
   }
+
+  const usersTotalPages = Math.max(1, Math.ceil(users.length / USERS_PAGE_SIZE));
+  const currentUsersPage = Math.min(usersPage, usersTotalPages);
+  const pagedUsers = useMemo(() => paginate(users, currentUsersPage, USERS_PAGE_SIZE), [users, currentUsersPage]);
+  const auditTotalPages = Math.max(1, Math.ceil(auditLogs.length / AUDIT_PAGE_SIZE));
+  const currentAuditPage = Math.min(auditPage, auditTotalPages);
+  const pagedAuditLogs = useMemo(() => paginate(auditLogs, currentAuditPage, AUDIT_PAGE_SIZE), [auditLogs, currentAuditPage]);
 
   async function handleCreateAccount(e: React.FormEvent) {
     e.preventDefault();
@@ -169,7 +183,7 @@ export default function AccessControl() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Access Control</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Assign operator, manager, or admin roles and review the latest record activity.</p>
+          <p className="text-slate-500 text-sm mt-0.5">Assign operator or manager roles and review the latest record activity.</p>
         </div>
         <button
           onClick={fetchData}
@@ -309,7 +323,7 @@ export default function AccessControl() {
             <ShieldCheck size={18} className="text-emerald-600" />
             <div>
               <h2 className="font-semibold text-slate-800">User Roles</h2>
-              <p className="text-xs text-slate-500">Admins and managers can edit records. Operators stay read-only.</p>
+              <p className="text-xs text-slate-500">Managers can edit records. Operators stay read-only.</p>
             </div>
           </div>
 
@@ -319,7 +333,7 @@ export default function AccessControl() {
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {users.map(appUser => {
+              {pagedUsers.map(appUser => {
                 const isCurrentUser = appUser.id === user?.id;
                 return (
                   <div key={appUser.id} className="px-5 py-4 flex items-center justify-between gap-4">
@@ -338,7 +352,6 @@ export default function AccessControl() {
                         onChange={event => handleRoleChange(appUser, event.target.value as UserRole)}
                         className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-200 disabled:bg-slate-50 disabled:text-slate-400"
                       >
-                        <option value="admin">Admin</option>
                         <option value="manager">Manager</option>
                         <option value="operator">Operator</option>
                       </select>
@@ -346,6 +359,7 @@ export default function AccessControl() {
                   </div>
                 );
               })}
+              <Pagination page={currentUsersPage} pageSize={USERS_PAGE_SIZE} totalItems={users.length} onPageChange={setUsersPage} />
             </div>
           )}
         </section>
@@ -378,7 +392,7 @@ export default function AccessControl() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {auditLogs.map(log => (
+                  {pagedAuditLogs.map(log => (
                     <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
                         {new Date(log.created_at).toLocaleString('en-PH', {
@@ -407,6 +421,7 @@ export default function AccessControl() {
                   ))}
                 </tbody>
               </table>
+              <Pagination page={currentAuditPage} pageSize={AUDIT_PAGE_SIZE} totalItems={auditLogs.length} onPageChange={setAuditPage} />
             </div>
           )}
         </section>

@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
+
+const PAGE_SIZE = 10;
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -17,8 +21,10 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchAR(); }, []);
+  useEffect(() => { setPage(1); }, [search]);
 
   async function fetchAR() {
     setLoading(true);
@@ -45,6 +51,9 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
   });
 
   const totalPending = filtered.reduce((s, r) => s + (r.total_amount ?? 0), 0);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRecords = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
@@ -102,7 +111,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map(r => (
+                {pagedRecords.map(r => (
                   <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
                       {new Date(r.transaction_date + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -132,6 +141,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
                 ))}
               </tbody>
             </table>
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
           </div>
         )}
       </div>

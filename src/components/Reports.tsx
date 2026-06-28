@@ -12,13 +12,18 @@ import {
   X,
   Download,
   FileText,
+  Package,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
+import Pagination from './Pagination';
+import { paginate } from '../lib/pagination';
 
-type ReportTab = 'sales' | 'customers' | 'expenses' | 'net';
+export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
 type Grouping = 'DAY' | 'WEEK' | 'MONTH';
+
+const REPORT_PAGE_SIZE = 10;
 
 interface SalesSummary {
   bucketStart: string;
@@ -58,6 +63,13 @@ interface DateRangeSummary {
   end: string;
   label: string;
   salesGrouping: 'DAY' | 'MONTH';
+}
+
+interface ProductSalesSummary {
+  materialType: string;
+  quantity: number;
+  volume: number;
+  revenue: number;
 }
 
 interface ExportReportData {
@@ -106,6 +118,11 @@ function formatVolume(v: number) {
 function csvEscape(value: string | number) {
   const text = String(value ?? '');
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function formatCsvCell(value: string | number) {
+  if (typeof value === 'number') return String(value);
+  return value;
 }
 
 function downloadTextFile(filename: string, content: string, mimeType: string) {
@@ -267,13 +284,54 @@ function tabButtonClass(active: boolean) {
     : 'bg-white text-slate-500 hover:text-slate-700 border border-slate-200';
 }
 
-export default function Reports() {
+const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
+
+function PieChart({ data }: { data: { label: string; value: number }[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const gradient = total > 0
+    ? data.map((item, index) => {
+        const start = cursor;
+        const end = cursor + (item.value / total) * 100;
+        cursor = end;
+        return `${chartColors[index % chartColors.length]} ${start}% ${end}%`;
+      }).join(', ')
+    : '#e2e8f0 0% 100%';
+
+  return (
+    <div className="flex items-center gap-5 flex-wrap">
+      <div className="relative w-40 h-40 rounded-full shrink-0" style={{ background: `conic-gradient(${gradient})` }}>
+        <div className="absolute inset-8 rounded-full bg-white flex items-center justify-center text-center">
+          <div>
+            <p className="text-xl font-bold text-slate-800 tabular-nums">{total}</p>
+            <p className="text-xs text-slate-500">sold</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-2 min-w-48 flex-1">
+        {data.length === 0 ? (
+          <p className="text-sm text-slate-500">No data available</p>
+        ) : data.map((item, index) => (
+          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2 min-w-0">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: chartColors[index % chartColors.length] }} />
+              <span className="text-slate-600 truncate">{item.label}</span>
+            </span>
+            <span className="font-semibold text-slate-800 tabular-nums">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportTab }) {
   const today = useMemo(() => toInputDate(new Date()), []);
   const defaultFrom = useMemo(() => addDays(today, -6), [today]);
   const currentMonth = useMemo(() => toMonthInput(new Date()), []);
   const currentYear = useMemo(() => String(new Date().getFullYear()), []);
 
-  const [activeTab, setActiveTab] = useState<ReportTab>('sales');
+  const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
   const [periodMode, setPeriodMode] = useState<PeriodMode>('CUSTOM');
   const [dateFrom, setDateFrom] = useState(defaultFrom);
   const [dateTo, setDateTo] = useState(today);
@@ -285,6 +343,13 @@ export default function Reports() {
   const [customerGrouping, setCustomerGrouping] = useState<Grouping>('WEEK');
   const [expenseGrouping, setExpenseGrouping] = useState<Grouping>('DAY');
   const [netGrouping, setNetGrouping] = useState<Grouping>('WEEK');
+  const [salesPage, setSalesPage] = useState(1);
+  const [customerSummaryPage, setCustomerSummaryPage] = useState(1);
+  const [customerTransactionsPage, setCustomerTransactionsPage] = useState(1);
+  const [expenseSummaryPage, setExpenseSummaryPage] = useState(1);
+  const [expenseCategoryPage, setExpenseCategoryPage] = useState(1);
+  const [netPage, setNetPage] = useState(1);
+  const [productsPage, setProductsPage] = useState(1);
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -357,6 +422,20 @@ export default function Reports() {
   useEffect(() => {
     fetchReportData();
   }, [fetchReportData]);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    setSalesPage(1);
+    setCustomerSummaryPage(1);
+    setCustomerTransactionsPage(1);
+    setExpenseSummaryPage(1);
+    setExpenseCategoryPage(1);
+    setNetPage(1);
+    setProductsPage(1);
+  }, [activeTab, range.start, range.end, customerId, paymentModeFilter, materialTypeFilter, customerGrouping, expenseGrouping, netGrouping]);
 
   const salesSummaryList = useMemo(() => {
     const bucketMap: Record<string, SalesSummary> = {};
@@ -474,6 +553,37 @@ export default function Reports() {
   const customerTotalVolume = useMemo(() => customerTransactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [customerTransactions]);
   const customerCount = useMemo(() => new Set(customerTransactions.map(tx => tx.customer_id).filter(Boolean)).size, [customerTransactions]);
 
+  const productSalesList = useMemo(() => {
+    const map: Record<string, ProductSalesSummary> = {};
+
+    transactions.forEach(tx => {
+      const materialType = tx.material_type || 'Unspecified';
+      if (!map[materialType]) {
+        map[materialType] = { materialType, quantity: 0, volume: 0, revenue: 0 };
+      }
+      map[materialType].quantity += 1;
+      map[materialType].volume += tx.volume_m3 ?? 0;
+      map[materialType].revenue += tx.total_amount ?? 0;
+    });
+
+    return Object.values(map).sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue || a.materialType.localeCompare(b.materialType));
+  }, [transactions]);
+
+  const productTotals = useMemo(() => ({
+    quantity: productSalesList.reduce((sum, product) => sum + product.quantity, 0),
+    volume: productSalesList.reduce((sum, product) => sum + product.volume, 0),
+    revenue: productSalesList.reduce((sum, product) => sum + product.revenue, 0),
+  }), [productSalesList]);
+
+  const productChartData = useMemo(() => {
+    const top = productSalesList.slice(0, 5);
+    const others = productSalesList.slice(5);
+    const rows = top.map(product => ({ label: product.materialType, value: product.quantity }));
+    const otherQuantity = others.reduce((sum, product) => sum + product.quantity, 0);
+    if (otherQuantity > 0) rows.push({ label: 'Others', value: otherQuantity });
+    return rows;
+  }, [productSalesList]);
+
   const netIncomeList = useMemo(() => {
     const bucketKeys = createContinuousBuckets(range.start, range.end, netGrouping);
     const bucketMap: Record<string, NetIncomeSummary> = {};
@@ -500,6 +610,21 @@ export default function Reports() {
   const totalExpenses = useMemo(() => expenses.reduce((sum, expense) => sum + (expense.amount ?? 0), 0), [expenses]);
   const netIncome = grandTotal - totalExpenses;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
+
+  const salesCurrentPage = Math.min(salesPage, Math.max(1, Math.ceil(salesSummaryList.length / REPORT_PAGE_SIZE)));
+  const pagedSalesSummary = useMemo(() => paginate(salesSummaryList, salesCurrentPage, REPORT_PAGE_SIZE), [salesSummaryList, salesCurrentPage]);
+  const customerSummaryCurrentPage = Math.min(customerSummaryPage, Math.max(1, Math.ceil(customerSummaryList.length / REPORT_PAGE_SIZE)));
+  const pagedCustomerSummary = useMemo(() => paginate(customerSummaryList, customerSummaryCurrentPage, REPORT_PAGE_SIZE), [customerSummaryList, customerSummaryCurrentPage]);
+  const customerTransactionsCurrentPage = Math.min(customerTransactionsPage, Math.max(1, Math.ceil(customerTransactions.length / REPORT_PAGE_SIZE)));
+  const pagedCustomerTransactions = useMemo(() => paginate(customerTransactions, customerTransactionsCurrentPage, REPORT_PAGE_SIZE), [customerTransactions, customerTransactionsCurrentPage]);
+  const expenseSummaryCurrentPage = Math.min(expenseSummaryPage, Math.max(1, Math.ceil(expenseSummaryList.length / REPORT_PAGE_SIZE)));
+  const pagedExpenseSummary = useMemo(() => paginate(expenseSummaryList, expenseSummaryCurrentPage, REPORT_PAGE_SIZE), [expenseSummaryList, expenseSummaryCurrentPage]);
+  const expenseCategoryCurrentPage = Math.min(expenseCategoryPage, Math.max(1, Math.ceil(expenseCategoryTotals.length / REPORT_PAGE_SIZE)));
+  const pagedExpenseCategories = useMemo(() => paginate(expenseCategoryTotals, expenseCategoryCurrentPage, REPORT_PAGE_SIZE), [expenseCategoryTotals, expenseCategoryCurrentPage]);
+  const netCurrentPage = Math.min(netPage, Math.max(1, Math.ceil(netIncomeList.length / REPORT_PAGE_SIZE)));
+  const pagedNetIncome = useMemo(() => paginate(netIncomeList, netCurrentPage, REPORT_PAGE_SIZE), [netIncomeList, netCurrentPage]);
+  const productsCurrentPage = Math.min(productsPage, Math.max(1, Math.ceil(productSalesList.length / REPORT_PAGE_SIZE)));
+  const pagedProductSales = useMemo(() => paginate(productSalesList, productsCurrentPage, REPORT_PAGE_SIZE), [productSalesList, productsCurrentPage]);
 
   const getReportExportData = useCallback((): ExportReportData => {
     const periodLabel = `${periodMode === 'CUSTOM' ? 'Custom date range' : periodMode === 'MONTHLY' ? 'Monthly' : 'Yearly'}: ${range.label}`;
@@ -533,22 +658,33 @@ export default function Reports() {
       const selectedPayment = paymentModeFilter === 'ALL' ? 'All payment modes' : paymentModeFilter;
       const selectedMaterial = materialTypeFilter === 'ALL' ? 'All products' : materialTypeFilter;
       const customerLabel = selectedCustomer?.name ?? 'All customers';
-      const headers = selectedCustomer
-        ? ['Period', 'Transactions', 'Volume (m3)', 'Sales']
-        : ['Period', 'Customers', 'Transactions', 'Volume (m3)', 'Sales'];
 
       return {
         title: 'Customer Sales History',
         filename: `customer-sales-history-${slugify(customerLabel)}-${slugify(range.label)}`,
-        filterLines: [...baseFilterLines, `Customer: ${customerLabel}`, `Payment mode: ${selectedPayment}`, `Product: ${selectedMaterial}`, `Grouping: ${customerGrouping}`],
-        headers,
-        rows: customerSummaryList.map(summary => selectedCustomer
-          ? [formatBucketLabel(summary.bucketStart, customerGrouping), summary.count, formatVolume(summary.volume), fmt(summary.total)]
-          : [formatBucketLabel(summary.bucketStart, customerGrouping), summary.customerIds.size, summary.count, formatVolume(summary.volume), fmt(summary.total)]
-        ),
-        totals: selectedCustomer
-          ? ['Totals', customerTransactions.length, formatVolume(customerTotalVolume), fmt(customerTotalSales)]
-          : ['Totals', customerCount, customerTransactions.length, formatVolume(customerTotalVolume), fmt(customerTotalSales)],
+        filterLines: [...baseFilterLines, `Customer: ${customerLabel}`, `Payment mode: ${selectedPayment}`, `Product: ${selectedMaterial}`],
+        headers: ['Date', 'DR #', 'Customer', 'Truck', 'Material', 'Length (cm)', 'Width (cm)', 'Height (cm)', 'Volume (m3)', 'Unit Price', 'Amount', 'DR Capitol', 'Passway', 'Kulot', 'Total', 'Mode', 'Status', 'Notes'],
+        rows: customerTransactions.map(tx => [
+          formatDateLabel(tx.transaction_date, { month: 'short', day: 'numeric', year: 'numeric' }),
+          tx.dr_number || '',
+          tx.customers?.name ?? '',
+          tx.trucks?.plate_number ?? '',
+          tx.material_type ?? '',
+          fmt(tx.length_cm ?? 0),
+          fmt(tx.width_cm ?? 0),
+          fmt(tx.height_cm ?? 0),
+          formatVolume(tx.volume_m3 ?? 0),
+          fmt(tx.unit_price ?? 0),
+          fmt(tx.amount ?? 0),
+          fmt(tx.dr_capitol ?? 0),
+          fmt(tx.passway ?? 0),
+          fmt(tx.kulot ?? 0),
+          fmt(tx.total_amount ?? 0),
+          tx.payment_mode ?? '',
+          tx.status ?? '',
+          tx.notes ?? '',
+        ]),
+        totals: ['Totals', '', '', '', '', '', '', '', formatVolume(customerTotalVolume), '', fmt(customerTransactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.passway ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.kulot ?? 0), 0)), fmt(customerTotalSales), '', '', ''],
       };
     }
 
@@ -556,14 +692,30 @@ export default function Reports() {
       return {
         title: 'Expense Summary',
         filename: `expense-summary-${slugify(range.label)}`,
-        filterLines: [...baseFilterLines, `Grouping: ${expenseGrouping}`],
-        headers: ['Period', 'Records', 'Total'],
-        rows: expenseSummaryList.map(row => [
-          formatBucketLabel(row.bucketStart, expenseGrouping),
-          row.count,
-          fmt(row.total),
+        filterLines: baseFilterLines,
+        headers: ['Category', 'Total', 'Share'],
+        rows: expenseCategoryTotals.map(([catName, catTotal]) => [
+          catName,
+          fmt(catTotal),
+          totalExpenses > 0 ? `${((catTotal / totalExpenses) * 100).toFixed(1)}%` : '',
         ]),
-        totals: ['Totals', totalExpenseRecords, fmt(totalExpenses)],
+        totals: ['Total', fmt(totalExpenses), totalExpenses > 0 ? '100%' : ''],
+      };
+    }
+
+    if (activeTab === 'products') {
+      return {
+        title: 'Product Sales Report',
+        filename: `product-sales-report-${slugify(range.label)}`,
+        filterLines: baseFilterLines,
+        headers: ['Product', 'Quantity Sold', 'Volume (m3)', 'Revenue'],
+        rows: productSalesList.map(product => [
+          product.materialType,
+          product.quantity,
+          formatVolume(product.volume),
+          fmt(product.revenue),
+        ]),
+        totals: ['Totals', productTotals.quantity, formatVolume(productTotals.volume), fmt(productTotals.revenue)],
       };
     }
 
@@ -584,14 +736,10 @@ export default function Reports() {
     activeTab,
     bankTransferTotal,
     cashTotal,
-    customerCount,
-    customerGrouping,
-    customerSummaryList,
     customerTotalSales,
     customerTotalVolume,
-    customerTransactions.length,
-    expenseGrouping,
-    expenseSummaryList,
+    customerTransactions,
+    expenseCategoryTotals,
     gcashTotal,
     grandTotal,
     grandVolume,
@@ -603,13 +751,16 @@ export default function Reports() {
     paymentModeFilter,
     periodMode,
     poTotal,
+    productSalesList,
+    productTotals.quantity,
+    productTotals.revenue,
+    productTotals.volume,
     range.end,
     range.label,
     range.salesGrouping,
     range.start,
     salesSummaryList,
     selectedCustomer,
-    totalExpenseRecords,
     totalExpenses,
     transactions.length,
   ]);
@@ -625,7 +776,7 @@ export default function Reports() {
       ...report.rows,
       ...(report.totals ? [report.totals] : []),
     ];
-    const csv = lines.map(row => row.map(csvEscape).join(',')).join('\n');
+    const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(formatCsvCell(cell))).join(',')).join('\r\n')}`;
     downloadTextFile(`${report.filename}.csv`, csv, 'text/csv;charset=utf-8');
   }, [getReportExportData]);
 
@@ -890,6 +1041,7 @@ export default function Reports() {
             { id: 'customers', label: 'Customer Sales History' },
             { id: 'expenses', label: 'Expense Summary' },
             { id: 'net', label: 'Expense vs Revenue' },
+            { id: 'products', label: 'Product Sales Report' },
           ].map(tab => (
             <button
               key={tab.id}
@@ -1097,7 +1249,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {salesSummaryList.map(summary => (
+                    {pagedSalesSummary.map(summary => (
                       <tr key={summary.bucketStart} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">
                           {formatBucketLabel(summary.bucketStart, range.salesGrouping)}
@@ -1127,6 +1279,7 @@ export default function Reports() {
                     </tr>
                   </tfoot>
                 </table>
+                <Pagination page={salesCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={salesSummaryList.length} onPageChange={setSalesPage} />
               </div>
             )}
           </div>
@@ -1175,7 +1328,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {customerSummaryList.map(summary => (
+                    {pagedCustomerSummary.map(summary => (
                       <tr key={summary.bucketStart} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">{formatBucketLabel(summary.bucketStart, customerGrouping)}</td>
                         {!selectedCustomer && <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{summary.customerIds.size}</td>}
@@ -1186,6 +1339,7 @@ export default function Reports() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination page={customerSummaryCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={customerSummaryList.length} onPageChange={setCustomerSummaryPage} />
               </div>
             )}
           </div>
@@ -1238,7 +1392,7 @@ export default function Reports() {
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {customerTransactions.map(tx => (
+                  {pagedCustomerTransactions.map(tx => (
                     <tr
                       key={tx.id}
                       className="hover:bg-slate-50 transition-colors cursor-pointer"
@@ -1360,6 +1514,7 @@ export default function Reports() {
                   ))}
                 </tbody>
               </table>
+              <Pagination page={customerTransactionsCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={customerTransactions.length} onPageChange={setCustomerTransactionsPage} />
             </div>
             )}
           </div>
@@ -1407,7 +1562,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {expenseSummaryList.map(row => (
+                    {pagedExpenseSummary.map(row => (
                       <tr key={row.bucketStart} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">
                           {formatBucketLabel(row.bucketStart, expenseGrouping)}
@@ -1425,6 +1580,7 @@ export default function Reports() {
                     </tr>
                   </tfoot>
                 </table>
+                <Pagination page={expenseSummaryCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={expenseSummaryList.length} onPageChange={setExpenseSummaryPage} />
               </div>
             )}
           </div>
@@ -1449,7 +1605,7 @@ export default function Reports() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {expenseCategoryTotals.map(([catName, catTotal]) => (
+                      {pagedExpenseCategories.map(([catName, catTotal]) => (
                         <tr key={catName} className="hover:bg-slate-50 transition-colors">
                           <td className="px-4 py-3 font-medium text-slate-700">{catName}</td>
                           <td className="px-4 py-3 text-right text-red-600 font-semibold tabular-nums">₱{fmt(catTotal)}</td>
@@ -1467,6 +1623,7 @@ export default function Reports() {
                       </tr>
                     </tfoot>
                   </table>
+                  <Pagination page={expenseCategoryCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={expenseCategoryTotals.length} onPageChange={setExpenseCategoryPage} />
                 </div>
               )}
             </div>
@@ -1516,7 +1673,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {netIncomeList.map(item => {
+                    {pagedNetIncome.map(item => {
                       const periodNet = item.revenue - item.expenses;
                       return (
                         <tr key={item.bucketStart} className="hover:bg-slate-50 transition-colors">
@@ -1537,8 +1694,97 @@ export default function Reports() {
                     </tr>
                   </tfoot>
                 </table>
+                <Pagination page={netCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={netIncomeList.length} onPageChange={setNetPage} />
               </div>
             )}
+          </div>
+        </>
+      )}
+
+      {activeTab === 'products' && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Top Product', value: productSalesList[0]?.materialType ?? '—', icon: <Package size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
+              { label: 'Quantity Sold', value: String(productTotals.quantity), icon: <Layers size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
+              { label: 'Products Sold', value: String(productSalesList.length), icon: <FileBarChart2 size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
+              { label: 'Revenue', value: `₱${fmt(productTotals.revenue)}`, icon: <DollarSign size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
+            ].map(card => (
+              <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
+                <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>
+                <p className="text-xs text-slate-500 font-medium">{card.label}</p>
+                <p className="text-lg font-bold text-slate-800 mt-0.5 tabular-nums truncate">{loading ? '—' : card.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+              <div className="mb-4">
+                <h2 className="font-semibold text-slate-800">Product Distribution</h2>
+                <p className="text-xs text-slate-500 mt-1">By quantity sold</p>
+              </div>
+              {loading ? (
+                <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
+                  <RefreshCw size={16} className="animate-spin" /> Loading product sales...
+                </div>
+              ) : productSalesList.length === 0 ? (
+                <div className="py-16 text-center">
+                  <Package size={32} className="text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500 text-sm">No data available</p>
+                </div>
+              ) : (
+                <PieChart data={productChartData} />
+              )}
+            </div>
+
+            <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100">
+                <h2 className="font-semibold text-slate-800">Product Sales Table</h2>
+              </div>
+              {loading ? (
+                <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
+                  <RefreshCw size={16} className="animate-spin" /> Loading product sales...
+                </div>
+              ) : productSalesList.length === 0 ? (
+                <div className="py-16 text-center">
+                  <Package size={32} className="text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500 text-sm">No product sales in selected range</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                        <th className="px-4 py-3 text-left">Product</th>
+                        <th className="px-4 py-3 text-right">Quantity Sold</th>
+                        <th className="px-4 py-3 text-right">Volume (m³)</th>
+                        <th className="px-4 py-3 text-right">Revenue</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pagedProductSales.map(product => (
+                        <tr key={product.materialType} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-slate-700">{product.materialType}</td>
+                          <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{product.quantity}</td>
+                          <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{formatVolume(product.volume)}</td>
+                          <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(product.revenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-900">
+                        <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Totals</td>
+                        <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">{productTotals.quantity}</td>
+                        <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">{formatVolume(productTotals.volume)}</td>
+                        <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(productTotals.revenue)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  <Pagination page={productsCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={productSalesList.length} onPageChange={setProductsPage} />
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}

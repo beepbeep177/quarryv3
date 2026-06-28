@@ -15,6 +15,7 @@ import AuthPage from './pages/AuthPage';
 import { useAuth } from './contexts/AuthContext';
 import type { NavSection } from './types';
 import type { TransactionWithRelations } from './lib/database.types';
+import type { ReportTab } from './components/Reports';
 
 export default function App() {
   const { user, role, isManager, loading, signOut } = useAuth();
@@ -22,6 +23,7 @@ export default function App() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<TransactionWithRelations | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [reportTab, setReportTab] = useState<ReportTab>('sales');
   const canManageRecords = !!role;
 
   function handleEditTransaction(tx: TransactionWithRelations) {
@@ -61,7 +63,16 @@ export default function App() {
       return;
     }
 
+    if (section === 'reports') {
+      setReportTab('sales');
+    }
+
     setActiveSection(section);
+  }
+
+  function openProductReport() {
+    setReportTab('products');
+    setActiveSection('reports');
   }
 
   function handleAddSuccess() {
@@ -108,6 +119,7 @@ export default function App() {
             {activeSection === 'dashboard' && (
               <Dashboard
                 onNavigate={handleNavigate}
+                onOpenProductReport={openProductReport}
                 refreshKey={refreshKey}
                 canManageRecords={canManageRecords}
               />
@@ -125,7 +137,7 @@ export default function App() {
             {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
             {activeSection === 'logistics-pricing' && <PricingList readOnly={!isManager} />}
             {activeSection === 'expenses' && <Expenses readOnly={!canManageRecords} />}
-            {activeSection === 'reports' && <Reports />}
+            {activeSection === 'reports' && <Reports initialTab={reportTab} />}
             {activeSection === 'access-control' && isManager && <AccessControl />}
           </div>
         </div>

@@ -532,6 +532,9 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
   const amt = productAmount(product);
   const total = productTotal(product);
   const n = (val: string) => parseFloat(val) || 0;
+  const selectedPricingId = pricingList.find(p =>
+    p.material_type === product.material_type && Number(p.unit_price) === n(product.unit_price)
+  )?.id ?? '';
 
   return (
     <div className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/50">
@@ -607,25 +610,24 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
             onChange={e => onChange('unit_price', e.target.value)}
             className={inputCls(!!errors.unit_price)}
           />
-          <div className="flex gap-2 flex-wrap">
+          <select
+            value={selectedPricingId}
+            onChange={e => {
+              const selected = pricingList.find(p => p.id === e.target.value);
+              if (!selected) return;
+              onChange('unit_price', String(selected.unit_price));
+              onChange('material_type', selected.material_type);
+            }}
+            disabled={pricingList.length === 0}
+            className={inputCls(false)}
+          >
+            <option value="">{pricingList.length === 0 ? 'No products available' : 'Select product price...'}</option>
             {pricingList.map(p => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  onChange('unit_price', String(p.unit_price));
-                  onChange('material_type', p.material_type);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap ${
-                  product.material_type === p.material_type
-                    ? 'bg-emerald-500 border-emerald-500 text-white'
-                    : 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600'
-                }`}
-              >
+              <option key={p.id} value={p.id}>
                 {p.material_type} <span className="opacity-75">₱{p.unit_price}</span>
-              </button>
+              </option>
             ))}
-          </div>
+          </select>
         </div>
       </Field>
 

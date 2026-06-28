@@ -8,6 +8,10 @@ function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatVolume(v: number) {
+  return v.toFixed(2);
+}
+
 export default function AccountsReceivable({ readOnly = false }: { readOnly?: boolean }) {
   const [records, setRecords] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
@@ -105,7 +109,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
                     </td>
                     <td className="px-4 py-3 font-mono font-semibold text-slate-700">{r.dr_number}</td>
                     <td className="px-4 py-3 text-slate-700">{r.customers?.name ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-semibold">{r.volume_m3?.toFixed(4)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-semibold">{formatVolume(r.volume_m3 ?? 0)}</td>
                     <td className="px-4 py-3 text-right tabular-nums font-bold text-slate-800">₱{fmt(r.total_amount)}</td>
                     <td className="px-4 py-3 text-center">
                       {r.payment_mode === 'P.O'

@@ -38,7 +38,7 @@ function formatCurrency(val: number) {
 }
 
 function formatVolume(val: number) {
-  return val.toFixed(4);
+  return val.toFixed(2);
 }
 
 export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: DashboardProps) {
@@ -226,7 +226,7 @@ export default function Dashboard({ onNavigate, refreshKey, canManageRecords }: 
                     <td className="px-5 py-3 font-mono text-slate-700 font-medium">{tx.dr_number}</td>
                     <td className="px-4 py-3 text-slate-700">{tx.customers?.name ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-500 font-mono text-xs">{tx.trucks?.plate_number ?? '—'}</td>
-                    <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{tx.volume_m3?.toFixed(4)}</td>
+                    <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{formatVolume(tx.volume_m3 ?? 0)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-slate-800 tabular-nums">{formatCurrency(tx.total_amount)}</td>
                     <td className="px-4 py-3 text-center">
                       <PaymentBadge mode={tx.payment_mode} />

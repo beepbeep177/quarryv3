@@ -47,6 +47,10 @@ function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
   };
 }
 
+function formatVolume(v: number) {
+  return v.toFixed(2);
+}
+
 const EMPTY_FORM: FormData = {
   customer_id: '',
   truck_id: '',
@@ -85,6 +89,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
+  const [trucksLoading, setTrucksLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -94,15 +99,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   useEffect(() => {
     Promise.all([
       supabase.from('customers').select('*').order('name'),
-      supabase.from('trucks').select('*').order('plate_number'),
       supabase.from('pricing').select('*').order('material_type'),
-    ]).then(([c, t, p]) => {
+    ]).then(([c, p]) => {
       const customersData = (c.data ?? []) as Customer[];
-      const trucksData = (t.data ?? []) as Truck[];
       const pricingData = (p.data ?? []) as Pricing[];
 
       setCustomers(customersData);
-      setTrucks(trucksData);
       setPricingList(pricingData);
 
       if (!isEditing && pricingData.length > 0) {
@@ -117,6 +119,54 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       }
     });
   }, [isEditing]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchCustomerTrucks() {
+      if (!form.customer_id) {
+        setTrucks(isEditing && transaction ? [transaction.trucks].filter(Boolean) as Truck[] : []);
+        setTrucksLoading(false);
+        return;
+      }
+
+      setTrucksLoading(true);
+      const { data: assignedData } = await supabase
+        .from('trucks')
+        .select('*')
+        .eq('customer_id', form.customer_id)
+        .order('plate_number');
+
+      let nextTrucks = (assignedData ?? []) as Truck[];
+
+      if (isEditing && transaction?.truck_id && !nextTrucks.some(truck => truck.id === transaction.truck_id)) {
+        const { data: savedTruck } = await supabase
+          .from('trucks')
+          .select('*')
+          .eq('id', transaction.truck_id)
+          .maybeSingle();
+        if (savedTruck) {
+          nextTrucks = [...nextTrucks, savedTruck as Truck].sort((a, b) => a.plate_number.localeCompare(b.plate_number));
+        }
+      }
+
+      if (!active) return;
+
+      setTrucks(nextTrucks);
+      setForm(current => (
+        current.truck_id && nextTrucks.some(truck => truck.id === current.truck_id)
+          ? current
+          : { ...current, truck_id: '' }
+      ));
+      setTrucksLoading(false);
+    }
+
+    fetchCustomerTrucks();
+
+    return () => {
+      active = false;
+    };
+  }, [form.customer_id, isEditing, transaction]);
 
   const n = (val: string) => parseFloat(val) || 0;
 
@@ -133,6 +183,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const setHeader = (key: keyof Omit<FormData, 'products'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
     setHeaderErrors(e => ({ ...e, [key]: undefined }));
+  };
+
+  const handleCustomerChange = (customerId: string) => {
+    setForm(f => ({ ...f, customer_id: customerId, truck_id: '' }));
+    setHeaderErrors(e => ({ ...e, customer_id: undefined, truck_id: undefined }));
   };
 
   const setProduct = (index: number, key: keyof ProductRow, val: string) => {
@@ -309,14 +364,22 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           {/* Customer & Truck */}
           <div className="grid grid-cols-2 gap-4">
             <Field label="Customer" error={headerErrors.customer_id}>
-              <select value={form.customer_id} onChange={e => setHeader('customer_id', e.target.value)} className={selectCls(!!headerErrors.customer_id)}>
+              <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)} className={selectCls(!!headerErrors.customer_id)}>
                 <option value="">Select customer...</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
             <Field label="Truck Plate #" error={headerErrors.truck_id}>
-              <select value={form.truck_id} onChange={e => handleTruckChange(e.target.value)} className={selectCls(!!headerErrors.truck_id)}>
-                <option value="">Select truck...</option>
+              <select value={form.truck_id} onChange={e => handleTruckChange(e.target.value)} disabled={!form.customer_id || trucksLoading} className={selectCls(!!headerErrors.truck_id)}>
+                <option value="">
+                  {!form.customer_id
+                    ? 'Select customer first...'
+                    : trucksLoading
+                      ? 'Loading trucks...'
+                      : trucks.length === 0
+                        ? 'No trucks available for selected customer'
+                        : 'Select truck...'}
+                </option>
                 {trucks.map(t => <option key={t.id} value={t.id}>{t.plate_number} — {t.driver_name}</option>)}
               </select>
             </Field>
@@ -525,7 +588,7 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
           <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Auto-Computed Values</span>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-          <ComputedRow label="Volume (m³)" value={`${vol.toFixed(4)} m³`} highlight />
+          <ComputedRow label="Volume (m³)" value={`${formatVolume(vol)} m³`} highlight />
           <ComputedRow label="Unit Price" value={`₱${fmt(n(product.unit_price))}`} />
           <ComputedRow label="Amount" value={`₱${fmt(amt)}`} highlight />
           <ComputedRow label="Total" value={`₱${fmt(total)}`} />

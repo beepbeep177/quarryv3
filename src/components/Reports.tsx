@@ -10,6 +10,8 @@ import {
   Banknote,
   ReceiptText,
   X,
+  Download,
+  FileText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
@@ -58,6 +60,15 @@ interface DateRangeSummary {
   salesGrouping: 'DAY' | 'MONTH';
 }
 
+interface ExportReportData {
+  title: string;
+  filename: string;
+  filterLines: string[];
+  headers: string[];
+  rows: (string | number)[][];
+  totals?: (string | number)[];
+}
+
 // Helper component for modal detail items
 function DetailItem({ 
   label, 
@@ -89,7 +100,37 @@ function fmt(v: number) {
 }
 
 function formatVolume(v: number) {
-  return v.toFixed(4);
+  return v.toFixed(2);
+}
+
+function csvEscape(value: string | number) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function htmlEscape(value: string | number) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
 function toInputDate(date: Date) {
@@ -460,6 +501,181 @@ export default function Reports() {
   const netIncome = grandTotal - totalExpenses;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
 
+  const getReportExportData = useCallback((): ExportReportData => {
+    const periodLabel = `${periodMode === 'CUSTOM' ? 'Custom date range' : periodMode === 'MONTHLY' ? 'Monthly' : 'Yearly'}: ${range.label}`;
+    const baseFilterLines = [
+      periodLabel,
+      `Date range: ${range.start} to ${range.end}`,
+    ];
+
+    if (activeTab === 'sales') {
+      return {
+        title: 'Sales Summary',
+        filename: `sales-summary-${slugify(range.label)}`,
+        filterLines: baseFilterLines,
+        headers: ['Period', 'Transactions', 'Volume (m3)', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'Total'],
+        rows: salesSummaryList.map(summary => [
+          formatBucketLabel(summary.bucketStart, range.salesGrouping),
+          summary.count,
+          formatVolume(summary.volume),
+          fmt(summary.cash),
+          fmt(summary.po),
+          fmt(summary.offset),
+          fmt(summary.gcash),
+          fmt(summary.bankTransfer),
+          fmt(summary.total),
+        ]),
+        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandTotal)],
+      };
+    }
+
+    if (activeTab === 'customers') {
+      const selectedPayment = paymentModeFilter === 'ALL' ? 'All payment modes' : paymentModeFilter;
+      const selectedMaterial = materialTypeFilter === 'ALL' ? 'All products' : materialTypeFilter;
+      const customerLabel = selectedCustomer?.name ?? 'All customers';
+      const headers = selectedCustomer
+        ? ['Period', 'Transactions', 'Volume (m3)', 'Sales']
+        : ['Period', 'Customers', 'Transactions', 'Volume (m3)', 'Sales'];
+
+      return {
+        title: 'Customer Sales History',
+        filename: `customer-sales-history-${slugify(customerLabel)}-${slugify(range.label)}`,
+        filterLines: [...baseFilterLines, `Customer: ${customerLabel}`, `Payment mode: ${selectedPayment}`, `Product: ${selectedMaterial}`, `Grouping: ${customerGrouping}`],
+        headers,
+        rows: customerSummaryList.map(summary => selectedCustomer
+          ? [formatBucketLabel(summary.bucketStart, customerGrouping), summary.count, formatVolume(summary.volume), fmt(summary.total)]
+          : [formatBucketLabel(summary.bucketStart, customerGrouping), summary.customerIds.size, summary.count, formatVolume(summary.volume), fmt(summary.total)]
+        ),
+        totals: selectedCustomer
+          ? ['Totals', customerTransactions.length, formatVolume(customerTotalVolume), fmt(customerTotalSales)]
+          : ['Totals', customerCount, customerTransactions.length, formatVolume(customerTotalVolume), fmt(customerTotalSales)],
+      };
+    }
+
+    if (activeTab === 'expenses') {
+      return {
+        title: 'Expense Summary',
+        filename: `expense-summary-${slugify(range.label)}`,
+        filterLines: [...baseFilterLines, `Grouping: ${expenseGrouping}`],
+        headers: ['Period', 'Records', 'Total'],
+        rows: expenseSummaryList.map(row => [
+          formatBucketLabel(row.bucketStart, expenseGrouping),
+          row.count,
+          fmt(row.total),
+        ]),
+        totals: ['Totals', totalExpenseRecords, fmt(totalExpenses)],
+      };
+    }
+
+    return {
+      title: 'Expense vs Revenue',
+      filename: `expense-vs-revenue-${slugify(range.label)}`,
+      filterLines: [...baseFilterLines, `Grouping: ${netGrouping}`],
+      headers: ['Period', 'Revenue', 'Expenses', 'Net Income'],
+      rows: netIncomeList.map(item => [
+        formatBucketLabel(item.bucketStart, netGrouping),
+        fmt(item.revenue),
+        fmt(item.expenses),
+        fmt(item.revenue - item.expenses),
+      ]),
+      totals: ['Totals', fmt(grandTotal), fmt(totalExpenses), fmt(netIncome)],
+    };
+  }, [
+    activeTab,
+    bankTransferTotal,
+    cashTotal,
+    customerCount,
+    customerGrouping,
+    customerSummaryList,
+    customerTotalSales,
+    customerTotalVolume,
+    customerTransactions.length,
+    expenseGrouping,
+    expenseSummaryList,
+    gcashTotal,
+    grandTotal,
+    grandVolume,
+    materialTypeFilter,
+    netGrouping,
+    netIncome,
+    netIncomeList,
+    offsetTotal,
+    paymentModeFilter,
+    periodMode,
+    poTotal,
+    range.end,
+    range.label,
+    range.salesGrouping,
+    range.start,
+    salesSummaryList,
+    selectedCustomer,
+    totalExpenseRecords,
+    totalExpenses,
+    transactions.length,
+  ]);
+
+  const exportCsv = useCallback(() => {
+    const report = getReportExportData();
+    const lines = [
+      [report.title],
+      ...report.filterLines.map(line => [line]),
+      [`Generated: ${new Date().toLocaleString('en-PH')}`],
+      [],
+      report.headers,
+      ...report.rows,
+      ...(report.totals ? [report.totals] : []),
+    ];
+    const csv = lines.map(row => row.map(csvEscape).join(',')).join('\n');
+    downloadTextFile(`${report.filename}.csv`, csv, 'text/csv;charset=utf-8');
+  }, [getReportExportData]);
+
+  const exportPdf = useCallback(() => {
+    const report = getReportExportData();
+    const generated = new Date().toLocaleString('en-PH');
+    const rowsHtml = report.rows.map(row => `<tr>${row.map(cell => `<td>${htmlEscape(cell)}</td>`).join('')}</tr>`).join('');
+    const totalsHtml = report.totals
+      ? `<tfoot><tr>${report.totals.map(cell => `<td>${htmlEscape(cell)}</td>`).join('')}</tr></tfoot>`
+      : '';
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups to export the report PDF.');
+      return;
+    }
+
+    printWindow.document.write(`<!doctype html>
+      <html>
+        <head>
+          <title>${htmlEscape(report.title)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #0f172a; margin: 32px; }
+            h1 { font-size: 22px; margin: 0 0 8px; }
+            .meta { color: #475569; font-size: 12px; line-height: 1.55; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th { text-align: left; background: #f1f5f9; color: #475569; text-transform: uppercase; letter-spacing: .03em; }
+            th, td { border: 1px solid #e2e8f0; padding: 7px 8px; }
+            td:not(:first-child), th:not(:first-child) { text-align: right; }
+            tfoot td { background: #0f172a; color: white; font-weight: 700; }
+            @media print { body { margin: 18mm; } }
+          </style>
+        </head>
+        <body>
+          <h1>${htmlEscape(report.title)}</h1>
+          <div class="meta">
+            ${report.filterLines.map(line => `<div>${htmlEscape(line)}</div>`).join('')}
+            <div>Generated: ${htmlEscape(generated)}</div>
+          </div>
+          <table>
+            <thead><tr>${report.headers.map(header => `<th>${htmlEscape(header)}</th>`).join('')}</tr></thead>
+            <tbody>${rowsHtml || `<tr><td colspan="${report.headers.length}">No records found.</td></tr>`}</tbody>
+            ${totalsHtml}
+          </table>
+        </body>
+      </html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }, [getReportExportData]);
+
   // Handle row double-click
   const handleRowDoubleClick = (tx: TransactionWithRelations) => {
     setSelectedTransaction(tx);
@@ -652,9 +868,19 @@ export default function Reports() {
           <h1 className="text-2xl font-bold text-slate-800">Reports</h1>
           <p className="text-slate-500 text-sm mt-0.5">Sales, customer performance, and net income views</p>
         </div>
-        <button onClick={fetchReportData} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
-          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+            <Download size={15} />
+            CSV
+          </button>
+          <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+            <FileText size={15} />
+            PDF
+          </button>
+          <button onClick={fetchReportData} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">

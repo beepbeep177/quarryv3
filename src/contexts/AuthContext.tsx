@@ -106,7 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user: session?.user ?? null,
     profile,
     role: profile?.role ?? null,
-    isManager: profile?.role === 'manager',
+    isManager: profile?.role === 'admin' || profile?.role === 'manager',
     loading,
     signUp,
     signIn,

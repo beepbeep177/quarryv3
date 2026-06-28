@@ -1,6 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type UserRole = 'manager' | 'operator';
+export type UserRole = 'admin' | 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
 export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER';
 export type TransactionStatus = 'PENDING' | 'PAID';
@@ -87,6 +87,7 @@ export type Database = {
           id: string;
           plate_number: string;
           driver_name: string;
+          customer_id: string | null;
           capacity_m3: number;
           length_cm: number;
           width_cm: number;
@@ -96,6 +97,7 @@ export type Database = {
         Insert: {
           plate_number: string;
           driver_name?: string;
+          customer_id?: string | null;
           capacity_m3?: number;
           length_cm?: number;
           width_cm?: number;
@@ -104,12 +106,20 @@ export type Database = {
         Update: {
           plate_number?: string;
           driver_name?: string;
+          customer_id?: string | null;
           capacity_m3?: number;
           length_cm?: number;
           width_cm?: number;
           height_cm?: number;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: 'trucks_customer_id_fkey';
+            columns: ['customer_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       pricing: {
         Row: {

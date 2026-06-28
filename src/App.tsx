@@ -123,7 +123,7 @@ export default function App() {
             {activeSection === 'customers-list' && <CustomersList readOnly={!canManageRecords} />}
             {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!canManageRecords} />}
             {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
-            {activeSection === 'logistics-pricing' && <PricingList readOnly={!canManageRecords} />}
+            {activeSection === 'logistics-pricing' && <PricingList readOnly={!isManager} />}
             {activeSection === 'expenses' && <Expenses readOnly={!canManageRecords} />}
             {activeSection === 'reports' && <Reports />}
             {activeSection === 'access-control' && isManager && <AccessControl />}

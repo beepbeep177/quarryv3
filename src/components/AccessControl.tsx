@@ -169,7 +169,7 @@ export default function AccessControl() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Access Control</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Assign operator or manager roles and review the latest record activity.</p>
+          <p className="text-slate-500 text-sm mt-0.5">Assign operator, manager, or admin roles and review the latest record activity.</p>
         </div>
         <button
           onClick={fetchData}
@@ -309,7 +309,7 @@ export default function AccessControl() {
             <ShieldCheck size={18} className="text-emerald-600" />
             <div>
               <h2 className="font-semibold text-slate-800">User Roles</h2>
-              <p className="text-xs text-slate-500">Managers can edit records. Operators stay read-only.</p>
+              <p className="text-xs text-slate-500">Admins and managers can edit records. Operators stay read-only.</p>
             </div>
           </div>
 
@@ -338,6 +338,7 @@ export default function AccessControl() {
                         onChange={event => handleRoleChange(appUser, event.target.value as UserRole)}
                         className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-200 disabled:bg-slate-50 disabled:text-slate-400"
                       >
+                        <option value="admin">Admin</option>
                         <option value="manager">Manager</option>
                         <option value="operator">Operator</option>
                       </select>

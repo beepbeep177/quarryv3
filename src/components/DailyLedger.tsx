@@ -25,6 +25,10 @@ function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatVolume(v: number) {
+  return v.toFixed(2);
+}
+
 export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readOnly }: DailyLedgerProps) {
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,7 +185,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                         <td className="px-4 py-3 text-right text-xs text-slate-500 tabular-nums whitespace-nowrap">
                           {tx.length_cm} × {tx.width_cm} × {tx.height_cm}
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold text-emerald-600 tabular-nums">{tx.volume_m3?.toFixed(4)}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-emerald-600 tabular-nums">{formatVolume(tx.volume_m3 ?? 0)}</td>
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums">₱{fmt(tx.unit_price)}</td>
                         <td className="px-4 py-3 text-right text-slate-700 tabular-nums">₱{fmt(tx.amount)}</td>
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums text-xs">
@@ -221,7 +225,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
               <div className="flex items-center gap-8">
                 <div className="text-right">
                   <p className="text-slate-500 text-xs">Total Volume</p>
-                  <p className="text-emerald-400 font-bold tabular-nums">{totals.volume.toFixed(4)} m³</p>
+                  <p className="text-emerald-400 font-bold tabular-nums">{formatVolume(totals.volume)} m³</p>
                 </div>
                 <div className="text-right">
                   <p className="text-slate-500 text-xs">Total Amount</p>

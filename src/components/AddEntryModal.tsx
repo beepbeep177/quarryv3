@@ -171,10 +171,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const n = (val: string) => parseFloat(val) || 0;
 
   const productVolume = useCallback((p: ProductRow) => {
-    return (n(p.length_cm) * n(p.width_cm) * n(p.height_cm)) / 1_000_000;
+    const raw = (n(p.length_cm) * n(p.width_cm) * n(p.height_cm)) / 1_000_000;
+    return parseFloat(raw.toFixed(2));
   }, []);
 
-  const productAmount = useCallback((p: ProductRow) => productVolume(p) * n(p.unit_price), [productVolume]);
+  const productAmount = useCallback((p: ProductRow) => parseFloat((productVolume(p) * n(p.unit_price)).toFixed(2)), [productVolume]);
 
   const productTotal = useCallback((p: ProductRow) => productAmount(p) + n(p.dr_capitol) + n(p.passway) + n(p.kulot), [productAmount]);
 

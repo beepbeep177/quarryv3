@@ -7,6 +7,8 @@ import {
   Layers,
   Trash2,
   Pencil,
+  Image as ImageIcon,
+  X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
@@ -41,6 +43,8 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
   const [productFilter, setProductFilter] = useState<string>('ALL');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [attachmentPreview, setAttachmentPreview] = useState<string[] | null>(null);
+  const [attachmentPreviewLoading, setAttachmentPreviewLoading] = useState(false);
 
   useEffect(() => { fetchTransactions(); }, [refreshKey]);
   useEffect(() => { setPage(1); }, [search, modeFilter, productFilter, refreshKey]);
@@ -62,6 +66,21 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
     await supabase.from('transactions').delete().eq('id', id);
     setTransactions(prev => prev.filter(t => t.id !== id));
     setDeletingId(null);
+  }
+
+  async function handleOpenAttachments(attachments: string[]) {
+    setAttachmentPreview([]);
+    setAttachmentPreviewLoading(true);
+    const signedUrls = await Promise.all(attachments.map(async (attachment) => {
+      if (/^https?:\/\//i.test(attachment)) return attachment;
+      const { data, error } = await supabase.storage
+        .from('transaction-attachments')
+        .createSignedUrl(attachment, 60 * 60);
+      if (error || !data?.signedUrl) return null;
+      return data.signedUrl;
+    }));
+    setAttachmentPreview(signedUrls.filter((url): url is string => !!url));
+    setAttachmentPreviewLoading(false);
   }
 
   const availableProducts = useMemo(() => {
@@ -149,29 +168,18 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
         {availableProducts.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-slate-400 font-medium">Product:</span>
-            <button
-              onClick={() => setProductFilter('ALL')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                productFilter === 'ALL'
-                  ? 'bg-slate-800 text-white'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
-              }`}
+            <select
+              value={productFilter}
+              onChange={e => setProductFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400"
             >
-              ALL
-            </button>
-            {availableProducts.map(product => (
-              <button
-                key={product}
-                onClick={() => setProductFilter(product)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  productFilter === product
-                    ? 'bg-teal-600 text-white'
-                    : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
-                }`}
-              >
-                {product}
-              </button>
-            ))}
+              <option value="ALL">ALL</option>
+              {availableProducts.map(product => (
+                <option key={product} value={product}>
+                  {product}
+                </option>
+              ))}
+            </select>
           </div>
         )}
         <button onClick={fetchTransactions} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
@@ -213,6 +221,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                     <th className="px-4 py-3 text-center">Mode</th>
                     <th className="px-4 py-3 text-center">Status</th>
                     <th className="px-4 py-3 text-left">Notes</th>
+                    <th className="px-4 py-3 text-left">Attachments</th>
                     {!readOnly && <th className="px-4 py-3"></th>}
                   </tr>
                 </thead>
@@ -239,6 +248,19 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                         <td className="px-4 py-3 text-center"><StatusBadge status={tx.status} /></td>
                         <td className="px-4 py-3 text-xs text-slate-500 max-w-40">
                           <p className="truncate" title={tx.notes || undefined}>{tx.notes || '—'}</p>
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {(tx.attachment_urls?.length ?? 0) > 0 ? (
+                            <button
+                              onClick={() => handleOpenAttachments(tx.attachment_urls)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+                            >
+                              <ImageIcon size={12} />
+                              View ({tx.attachment_urls.length})
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
                         </td>
                         {!readOnly && (
                           <td className="px-4 py-3 text-center">
@@ -283,6 +305,35 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
           </>
         )}
       </div>
+
+      {attachmentPreview && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-3xl rounded-xl shadow-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-700">Transaction Attachments</p>
+              <button
+                onClick={() => setAttachmentPreview(null)}
+                className="w-7 h-7 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 flex items-center justify-center"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[70vh] overflow-y-auto">
+              {attachmentPreviewLoading ? (
+                <div className="col-span-full text-sm text-slate-500">Loading attachments...</div>
+              ) : attachmentPreview.length === 0 ? (
+                <div className="col-span-full text-sm text-slate-500">No attachments available.</div>
+              ) : (
+                attachmentPreview.map((url, index) => (
+                  <a key={`${url}-${index}`} href={url} target="_blank" rel="noopener noreferrer" className="block rounded-lg overflow-hidden border border-slate-200">
+                    <img src={url} alt={`Attachment ${index + 1}`} className="w-full h-44 object-cover bg-slate-50" />
+                  </a>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

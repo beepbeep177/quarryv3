@@ -3,10 +3,15 @@ ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS attachment_urls text[] NOT NULL DEFAULT '{}';
 
 INSERT INTO storage.buckets (id, name, public)
-SELECT 'transaction-attachments', 'transaction-attachments', true
+SELECT 'transaction-attachments', 'transaction-attachments', false
 WHERE NOT EXISTS (
   SELECT 1 FROM storage.buckets WHERE id = 'transaction-attachments'
 );
+
+UPDATE storage.buckets
+SET public = false
+WHERE id = 'transaction-attachments'
+  AND public IS DISTINCT FROM false;
 
 DO $$
 BEGIN

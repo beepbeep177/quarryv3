@@ -53,6 +53,17 @@ function formatVolume(v: number) {
   return v.toFixed(2);
 }
 
+function getFileExtension(file: File): string {
+  const fileNameExt = file.name.includes('.') ? file.name.split('.').pop()?.trim().toLowerCase() ?? '' : '';
+  if (/^[a-z0-9]+$/.test(fileNameExt)) return fileNameExt;
+  const mimeExt = file.type.split('/')[1]?.split('+')[0]?.toLowerCase() ?? '';
+  return /^[a-z0-9]+$/.test(mimeExt) ? mimeExt : 'jpg';
+}
+
+function getAttachmentFolder(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayDate;
+}
+
 const EMPTY_FORM: FormData = {
   customer_id: '',
   truck_id: '',
@@ -283,8 +294,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       if (!p.length_cm || n(p.length_cm) <= 0) { e.length_cm = 'Must be > 0'; valid = false; }
       if (!p.width_cm || n(p.width_cm) <= 0) { e.width_cm = 'Must be > 0'; valid = false; }
       if (!p.height_cm || n(p.height_cm) <= 0) { e.height_cm = 'Must be > 0'; valid = false; }
-      if (p.unit_price === '') { e.unit_price = 'Required'; valid = false; }
-      else if (n(p.unit_price) < 0) { e.unit_price = 'Must be ≥ 0'; valid = false; }
+      const price = Number(p.unit_price);
+      if (p.unit_price === '' || Number.isNaN(price) || price < 0) { e.unit_price = 'Must be a number >= 0'; valid = false; }
       return e;
     });
     setProductErrors(pErrs);
@@ -295,23 +306,32 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const hasZeroUnitPrice = form.products.some(product => product.unit_price !== '' && n(product.unit_price) === 0);
 
   async function uploadNewAttachments() {
-    const uploadedUrls: string[] = [];
+    const uploadedPaths: string[] = [];
 
-    for (const file of newAttachmentFiles) {
-      const extension = file.name.split('.').pop() || 'jpg';
-      const filePath = `${form.transaction_date}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
-      const { error } = await supabase.storage.from(ATTACHMENTS_BUCKET).upload(filePath, file, {
-        contentType: file.type,
-        upsert: false,
-      });
-      if (error) {
-        throw new Error(error.message || 'Failed to upload attachment.');
+    try {
+      for (const file of newAttachmentFiles) {
+        const extension = getFileExtension(file);
+        const filePath = `${getAttachmentFolder(form.transaction_date)}/${crypto.randomUUID()}.${extension}`;
+        const { error } = await supabase.storage.from(ATTACHMENTS_BUCKET).upload(filePath, file, {
+          contentType: file.type,
+          upsert: false,
+        });
+        if (error) {
+          throw new Error(error.message || 'Failed to upload attachment.');
+        }
+        uploadedPaths.push(filePath);
       }
-      const { data } = supabase.storage.from(ATTACHMENTS_BUCKET).getPublicUrl(filePath);
-      uploadedUrls.push(data.publicUrl);
+    } catch (error) {
+      if (uploadedPaths.length > 0) {
+        const { error: cleanupError } = await supabase.storage.from(ATTACHMENTS_BUCKET).remove(uploadedPaths);
+        if (cleanupError) {
+          console.error('Attachment cleanup failed:', cleanupError.message);
+        }
+      }
+      throw error;
     }
 
-    return uploadedUrls;
+    return uploadedPaths;
   }
 
   async function persistForm() {
@@ -321,8 +341,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     setSaveError(null);
 
     try {
-      const uploadedUrls = await uploadNewAttachments();
-      const attachmentUrls = [...existingAttachmentUrls, ...uploadedUrls];
+      const uploadedPaths = await uploadNewAttachments();
+      const attachmentUrls = [...existingAttachmentUrls, ...uploadedPaths];
 
       if (isEditing) {
         const p = form.products[0];
@@ -558,7 +578,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {existingAttachmentUrls.map(url => (
                   <div key={url} className="relative rounded-lg overflow-hidden border border-slate-200 bg-white">
-                    <a href={url} target="_blank" rel="noreferrer">
+                    <a href={url} target="_blank" rel="noopener noreferrer">
                       <img src={url} alt="Attachment" className="w-full h-24 object-cover" />
                     </a>
                     <button

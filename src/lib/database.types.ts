@@ -162,6 +162,7 @@ export type Database = {
           payment_mode: PaymentMode;
           status: TransactionStatus;
           notes: string;
+          attachment_urls: string[];
           created_at: string;
         };
         Insert: {
@@ -180,6 +181,7 @@ export type Database = {
           payment_mode?: PaymentMode;
           status?: TransactionStatus;
           notes?: string;
+          attachment_urls?: string[];
         };
         Update: {
           transaction_date?: string;
@@ -197,6 +199,7 @@ export type Database = {
           payment_mode?: PaymentMode;
           status?: TransactionStatus;
           notes?: string;
+          attachment_urls?: string[];
         };
         Relationships: [
           {

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2 } from 'lucide-react';
+import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 
@@ -32,6 +32,8 @@ interface FormData {
 }
 
 const todayDate = new Date().toISOString().split('T')[0];
+const ATTACHMENTS_BUCKET = 'transaction-attachments';
+const MAX_ATTACHMENTS = 5;
 
 function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
   return {
@@ -95,6 +97,9 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const [saveError, setSaveError] = useState<string | null>(null);
   const [headerErrors, setHeaderErrors] = useState<Partial<Record<'customer_id' | 'truck_id', string>>>({});
   const [productErrors, setProductErrors] = useState<Partial<Record<keyof ProductRow, string>>[]>([{}]);
+  const [existingAttachmentUrls, setExistingAttachmentUrls] = useState<string[]>(transaction?.attachment_urls ?? []);
+  const [newAttachmentFiles, setNewAttachmentFiles] = useState<File[]>([]);
+  const [showZeroPriceWarning, setShowZeroPriceWarning] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -119,6 +124,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       }
     });
   }, [isEditing]);
+
+  useEffect(() => {
+    setExistingAttachmentUrls(transaction?.attachment_urls ?? []);
+    setNewAttachmentFiles([]);
+    setShowZeroPriceWarning(false);
+  }, [transaction]);
 
   useEffect(() => {
     let active = true;
@@ -219,6 +230,29 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     setProductErrors(errs => errs.filter((_, i) => i !== index));
   };
 
+  const totalAttachmentCount = existingAttachmentUrls.length + newAttachmentFiles.length;
+
+  const handleAttachmentSelection = (files: FileList | null) => {
+    if (!files) return;
+    const selectedImages = Array.from(files).filter(file => file.type.startsWith('image/'));
+    const remainingSlots = Math.max(0, MAX_ATTACHMENTS - totalAttachmentCount);
+    if (remainingSlots === 0) {
+      setSaveError(`Maximum ${MAX_ATTACHMENTS} attachments allowed.`);
+      return;
+    }
+    const toAdd = selectedImages.slice(0, remainingSlots);
+    setNewAttachmentFiles(prev => [...prev, ...toAdd]);
+    setSaveError(null);
+  };
+
+  const removeExistingAttachment = (url: string) => {
+    setExistingAttachmentUrls(prev => prev.filter(item => item !== url));
+  };
+
+  const removeNewAttachment = (index: number) => {
+    setNewAttachmentFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   // Auto-fill truck dimensions into all product rows when truck changes
   const handleTruckChange = (truckId: string) => {
     const truck = trucks.find(t => t.id === truckId);
@@ -249,7 +283,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       if (!p.length_cm || n(p.length_cm) <= 0) { e.length_cm = 'Must be > 0'; valid = false; }
       if (!p.width_cm || n(p.width_cm) <= 0) { e.width_cm = 'Must be > 0'; valid = false; }
       if (!p.height_cm || n(p.height_cm) <= 0) { e.height_cm = 'Must be > 0'; valid = false; }
-      if (!p.unit_price || n(p.unit_price) <= 0) { e.unit_price = 'Must be > 0'; valid = false; }
+      if (p.unit_price === '') { e.unit_price = 'Required'; valid = false; }
+      else if (n(p.unit_price) < 0) { e.unit_price = 'Must be ≥ 0'; valid = false; }
       return e;
     });
     setProductErrors(pErrs);
@@ -257,69 +292,101 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     return valid;
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!validate()) return;
+  const hasZeroUnitPrice = form.products.some(product => product.unit_price !== '' && n(product.unit_price) === 0);
+
+  async function uploadNewAttachments() {
+    const uploadedUrls: string[] = [];
+
+    for (const file of newAttachmentFiles) {
+      const extension = file.name.split('.').pop() || 'jpg';
+      const filePath = `${form.transaction_date}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+      const { error } = await supabase.storage.from(ATTACHMENTS_BUCKET).upload(filePath, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+      if (error) {
+        throw new Error(error.message || 'Failed to upload attachment.');
+      }
+      const { data } = supabase.storage.from(ATTACHMENTS_BUCKET).getPublicUrl(filePath);
+      uploadedUrls.push(data.publicUrl);
+    }
+
+    return uploadedUrls;
+  }
+
+  async function persistForm() {
+    if (saving) return;
 
     setSaving(true);
     setSaveError(null);
 
-    if (isEditing) {
-      // Edit mode: single product row
-      const p = form.products[0];
-      const payload = {
-        transaction_date: form.transaction_date,
-        customer_id: form.customer_id,
-        truck_id: form.truck_id,
-        dr_number: p.dr_number.trim(),
-        material_type: p.material_type || 'Crushed Stone',
-        length_cm: n(p.length_cm),
-        width_cm: n(p.width_cm),
-        height_cm: n(p.height_cm),
-        unit_price: n(p.unit_price),
-        dr_capitol: n(p.dr_capitol),
-        passway: n(p.passway),
-        kulot: n(p.kulot),
-        payment_mode: form.payment_mode,
-        status: form.status,
-        notes: form.notes,
-      };
-      const { error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id);
-      setSaving(false);
-      if (!error) {
-        setSaved(true);
-        setTimeout(() => { onSuccess(); onClose(); }, 900);
+    try {
+      const uploadedUrls = await uploadNewAttachments();
+      const attachmentUrls = [...existingAttachmentUrls, ...uploadedUrls];
+
+      if (isEditing) {
+        const p = form.products[0];
+        const payload = {
+          transaction_date: form.transaction_date,
+          customer_id: form.customer_id,
+          truck_id: form.truck_id,
+          dr_number: p.dr_number.trim(),
+          material_type: p.material_type || 'Crushed Stone',
+          length_cm: n(p.length_cm),
+          width_cm: n(p.width_cm),
+          height_cm: n(p.height_cm),
+          unit_price: n(p.unit_price),
+          dr_capitol: n(p.dr_capitol),
+          passway: n(p.passway),
+          kulot: n(p.kulot),
+          payment_mode: form.payment_mode,
+          status: form.status,
+          notes: form.notes,
+          attachment_urls: attachmentUrls,
+        };
+        const { error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id);
+        if (error) throw new Error(error.message || 'Failed to save. Please try again.');
       } else {
-        setSaveError(error.message || 'Failed to save. Please try again.');
+        const rows = form.products.map(p => ({
+          transaction_date: form.transaction_date,
+          customer_id: form.customer_id,
+          truck_id: form.truck_id,
+          dr_number: p.dr_number.trim(),
+          material_type: p.material_type || 'Crushed Stone',
+          length_cm: n(p.length_cm),
+          width_cm: n(p.width_cm),
+          height_cm: n(p.height_cm),
+          unit_price: n(p.unit_price),
+          dr_capitol: n(p.dr_capitol),
+          passway: n(p.passway),
+          kulot: n(p.kulot),
+          payment_mode: form.payment_mode,
+          status: (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
+          notes: form.notes,
+          attachment_urls: attachmentUrls,
+        }));
+        const { error } = await supabase.from('transactions').insert(rows);
+        if (error) throw new Error(error.message || 'Failed to save. Please try again.');
       }
-    } else {
-      // Add mode: insert one transaction per product row
-      const rows = form.products.map(p => ({
-        transaction_date: form.transaction_date,
-        customer_id: form.customer_id,
-        truck_id: form.truck_id,
-        dr_number: p.dr_number.trim(),
-        material_type: p.material_type || 'Crushed Stone',
-        length_cm: n(p.length_cm),
-        width_cm: n(p.width_cm),
-        height_cm: n(p.height_cm),
-        unit_price: n(p.unit_price),
-        dr_capitol: n(p.dr_capitol),
-        passway: n(p.passway),
-        kulot: n(p.kulot),
-        payment_mode: form.payment_mode,
-        status: (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
-        notes: form.notes,
-      }));
-      const { error } = await supabase.from('transactions').insert(rows);
+
+      setSaved(true);
+      setTimeout(() => { onSuccess(); onClose(); }, 900);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save. Please try again.';
+      setSaveError(message);
+    } finally {
       setSaving(false);
-      if (!error) {
-        setSaved(true);
-        setTimeout(() => { onSuccess(); onClose(); }, 900);
-      } else {
-        setSaveError(error.message || 'Failed to save. Please try again.');
-      }
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!validate()) return;
+    if (hasZeroUnitPrice) {
+      setShowZeroPriceWarning(true);
+      return;
+    }
+    await persistForm();
   }
 
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -465,6 +532,65 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
             )}
           </div>
 
+          {/* Attachments */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                Attachments ({totalAttachmentCount}/{MAX_ATTACHMENTS})
+              </p>
+              <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer hover:bg-slate-50">
+                <ImagePlus size={13} />
+                Add Image
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={e => {
+                    handleAttachmentSelection(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
+
+            {existingAttachmentUrls.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {existingAttachmentUrls.map(url => (
+                  <div key={url} className="relative rounded-lg overflow-hidden border border-slate-200 bg-white">
+                    <a href={url} target="_blank" rel="noreferrer">
+                      <img src={url} alt="Attachment" className="w-full h-24 object-cover" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => removeExistingAttachment(url)}
+                      className="absolute top-1 right-1 w-6 h-6 rounded-full bg-slate-900/70 text-white flex items-center justify-center"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {newAttachmentFiles.length > 0 && (
+              <div className="space-y-2">
+                {newAttachmentFiles.map((file, index) => (
+                  <div key={`${file.name}-${index}`} className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-xs text-slate-600 truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeNewAttachment(index)}
+                      className="text-xs text-red-500 hover:text-red-700 font-semibold"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Notes */}
           <Field label="Notes (optional)">
             <textarea
@@ -510,6 +636,39 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           </div>
         </form>
       </div>
+
+      {showZeroPriceWarning && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-amber-100">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+              <AlertTriangle size={18} className="text-amber-500" />
+              <p className="text-sm font-bold text-slate-800">Confirm zero unit price</p>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-slate-600">One or more products have a unit price of ₱0.00. Continue saving this entry?</p>
+            </div>
+            <div className="px-5 pb-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowZeroPriceWarning(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowZeroPriceWarning(false);
+                  await persistForm();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-semibold text-sm"
+              >
+                Continue Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

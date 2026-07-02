@@ -38,11 +38,12 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modeFilter, setModeFilter] = useState<PaymentMode | 'ALL'>('ALL');
+  const [productFilter, setProductFilter] = useState<string>('ALL');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
   useEffect(() => { fetchTransactions(); }, [refreshKey]);
-  useEffect(() => { setPage(1); }, [search, modeFilter, refreshKey]);
+  useEffect(() => { setPage(1); }, [search, modeFilter, productFilter, refreshKey]);
 
   async function fetchTransactions() {
     setLoading(true);
@@ -63,6 +64,11 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
     setDeletingId(null);
   }
 
+  const availableProducts = useMemo(() => {
+    const products = [...new Set(transactions.map(t => t.material_type).filter(Boolean))].sort();
+    return products;
+  }, [transactions]);
+
   const filtered = transactions.filter(t => {
     const q = search.toLowerCase();
     const matchSearch =
@@ -71,7 +77,8 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
       (t.customers?.name ?? '').toLowerCase().includes(q) ||
       (t.trucks?.plate_number ?? '').toLowerCase().includes(q);
     const matchMode = modeFilter === 'ALL' || t.payment_mode === modeFilter;
-    return matchSearch && matchMode;
+    const matchProduct = productFilter === 'ALL' || t.material_type === productFilter;
+    return matchSearch && matchMode && matchProduct;
   });
 
   const totals = filtered.reduce(
@@ -118,7 +125,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
             className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 bg-white"
           />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <Filter size={14} className="text-slate-400" />
           {(['ALL', 'CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'] as const).map(mode => (
             <button
@@ -139,6 +146,34 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
             </button>
           ))}
         </div>
+        {availableProducts.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-slate-400 font-medium">Product:</span>
+            <button
+              onClick={() => setProductFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                productFilter === 'ALL'
+                  ? 'bg-slate-800 text-white'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              ALL
+            </button>
+            {availableProducts.map(product => (
+              <button
+                key={product}
+                onClick={() => setProductFilter(product)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  productFilter === product
+                    ? 'bg-teal-600 text-white'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                {product}
+              </button>
+            ))}
+          </div>
+        )}
         <button onClick={fetchTransactions} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
         </button>
@@ -169,7 +204,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                     <th className="px-4 py-3 text-left">DR #</th>
                     <th className="px-4 py-3 text-left">Customer</th>
                     <th className="px-4 py-3 text-left">Truck</th>
-                    <th className="px-4 py-3 text-right">L × W × H (cm)</th>
+                    <th className="px-4 py-3 text-left">Product</th>
                     <th className="px-4 py-3 text-right">Volume (m³)</th>
                     <th className="px-4 py-3 text-right">Unit Price</th>
                     <th className="px-4 py-3 text-right">Amount</th>
@@ -177,6 +212,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                     <th className="px-4 py-3 text-right">Total</th>
                     <th className="px-4 py-3 text-center">Mode</th>
                     <th className="px-4 py-3 text-center">Status</th>
+                    <th className="px-4 py-3 text-left">Notes</th>
                     {!readOnly && <th className="px-4 py-3"></th>}
                   </tr>
                 </thead>
@@ -191,9 +227,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                           <p className="truncate">{tx.customers?.name ?? '—'}</p>
                         </td>
                         <td className="px-4 py-3 font-mono text-xs text-slate-500">{tx.trucks?.plate_number ?? '—'}</td>
-                        <td className="px-4 py-3 text-right text-xs text-slate-500 tabular-nums whitespace-nowrap">
-                          {tx.length_cm} × {tx.width_cm} × {tx.height_cm}
-                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600">{tx.material_type || '—'}</td>
                         <td className="px-4 py-3 text-right font-semibold text-emerald-600 tabular-nums">{formatVolume(tx.volume_m3 ?? 0)}</td>
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums">₱{fmt(tx.unit_price)}</td>
                         <td className="px-4 py-3 text-right text-slate-700 tabular-nums">₱{fmt(tx.amount)}</td>
@@ -203,6 +237,9 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                         <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(tx.total_amount)}</td>
                         <td className="px-4 py-3 text-center"><PaymentBadge mode={tx.payment_mode} /></td>
                         <td className="px-4 py-3 text-center"><StatusBadge status={tx.status} /></td>
+                        <td className="px-4 py-3 text-xs text-slate-500 max-w-40">
+                          <p className="truncate" title={tx.notes || undefined}>{tx.notes || '—'}</p>
+                        </td>
                         {!readOnly && (
                           <td className="px-4 py-3 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">

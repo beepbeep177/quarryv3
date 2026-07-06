@@ -49,8 +49,8 @@ export default function Sidebar({ activeSection, onNavigate, isManager }: Sideba
         label: 'Daily Transactions',
         icon: <ClipboardList size={18} />,
         children: [
-          { id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> },
-          { id: 'daily-view', label: 'View Today', icon: <Eye size={15} /> },
+          ...(isManager ? [{ id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> }] : []),
+          { id: 'daily-view' as const, label: 'View Today', icon: <Eye size={15} /> },
         ],
       },
       {

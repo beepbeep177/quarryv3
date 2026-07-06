@@ -50,6 +50,17 @@ function formatVolume(val: number) {
   return val.toFixed(2);
 }
 
+function getSplitModeAmount(tx: TransactionWithRelations, mode: 'GCASH' | 'BANK_TRANSFER') {
+  if (!Array.isArray(tx.split_payment_details)) return 0;
+  return tx.split_payment_details.reduce((sum, detail) => {
+    if (!detail || typeof detail !== 'object') return sum;
+    const selectedMode = 'mode' in detail ? String(detail.mode) : '';
+    const amount = 'amount' in detail ? Number(detail.amount) : NaN;
+    if (selectedMode !== mode || Number.isNaN(amount) || amount < 0) return sum;
+    return sum + amount;
+  }, 0);
+}
+
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 
 function PieChart({ data }: { data: { label: string; value: number }[] }) {
@@ -127,8 +138,16 @@ export default function Dashboard({ onNavigate, onOpenProductReport, refreshKey,
       const totalSalesToday = txList.reduce((s, t) => s + (t.total_amount ?? 0), 0);
       const totalVolume = txList.reduce((s, t) => s + (t.volume_m3 ?? 0), 0);
       const pendingAR = (allPending ?? []).reduce((s, t) => s + (t.total_amount ?? 0), 0);
-      const gcashTotal = txList.filter(t => t.payment_mode === 'GCASH').reduce((s, t) => s + (t.total_amount ?? 0), 0);
-      const bankTransferTotal = txList.filter(t => t.payment_mode === 'BANK_TRANSFER').reduce((s, t) => s + (t.total_amount ?? 0), 0);
+      const gcashTotal = txList.reduce((sum, tx) => {
+        if (tx.payment_mode === 'GCASH') return sum + (tx.total_amount ?? 0);
+        if (tx.payment_mode === 'SPLIT') return sum + getSplitModeAmount(tx, 'GCASH');
+        return sum;
+      }, 0);
+      const bankTransferTotal = txList.reduce((sum, tx) => {
+        if (tx.payment_mode === 'BANK_TRANSFER') return sum + (tx.total_amount ?? 0);
+        if (tx.payment_mode === 'SPLIT') return sum + getSplitModeAmount(tx, 'BANK_TRANSFER');
+        return sum;
+      }, 0);
 
       setStats({
         totalSalesToday,
@@ -372,5 +391,7 @@ function PaymentBadge({ mode }: { mode: string }) {
   if (mode === 'P.O') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>;
   if (mode === 'GCASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">GCASH</span>;
   if (mode === 'BANK_TRANSFER') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">BANK</span>;
+  if (mode === 'DONATION') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">DONATION</span>;
+  if (mode === 'SPLIT') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-cyan-100 text-cyan-700">SPLIT</span>;
   return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>;
 }

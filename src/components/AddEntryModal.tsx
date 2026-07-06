@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
+import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
 
 interface AddEntryModalProps {
   onClose: () => void;
@@ -31,8 +32,6 @@ interface FormData {
   split_payment_details: SplitPaymentDetailInput[];
   products: ProductRow[];
 }
-
-type SplitPaymentMode = Exclude<PaymentMode, 'DONATION' | 'SPLIT'>;
 
 interface SplitPaymentDetailInput {
   mode: SplitPaymentMode;
@@ -91,7 +90,7 @@ function txToForm(tx: TransactionWithRelations): FormData {
         .map(item => {
           const mode = item && typeof item === 'object' && 'mode' in item ? String(item.mode) : '';
           const amount = item && typeof item === 'object' && 'amount' in item ? Number(item.amount) : NaN;
-          const isValidMode = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'].includes(mode);
+          const isValidMode = SPLIT_PAYMENT_MODES.includes(mode as SplitPaymentMode);
           if (!isValidMode || Number.isNaN(amount) || amount < 0) return null;
           return { mode: mode as SplitPaymentMode, amount: String(amount) };
         })
@@ -232,7 +231,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const isDonationMode = form.payment_mode === 'DONATION';
   const grandTotal = isDonationMode ? 0 : rawGrandTotal;
 
-  const setHeader = (key: 'customer_id' | 'truck_id' | 'transaction_date' | 'payment_mode' | 'status' | 'notes', val: string) => {
+  const setHeader = (key: keyof Omit<FormData, 'products' | 'split_payment_details'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
     if (key === 'customer_id' || key === 'truck_id') {
       setHeaderErrors(e => ({ ...e, [key]: undefined }));
@@ -255,7 +254,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     setProductErrors(errs => errs.map((e, i) => i === index ? { ...e, [key]: undefined } : e));
   };
 
-  const splitModes: SplitPaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'];
+  const splitModes: SplitPaymentMode[] = [...SPLIT_PAYMENT_MODES];
 
   const autoSplitAmounts = useCallback((modes: SplitPaymentMode[], total: number): SplitPaymentDetailInput[] => {
     if (modes.length === 0) return [];
@@ -538,7 +537,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER', 'DONATION', 'SPLIT'];
+  const paymentModes: PaymentMode[] = [...PAYMENT_MODES];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">

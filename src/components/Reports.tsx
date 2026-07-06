@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import { getPaymentModeAmount } from '../lib/payment';
 
 export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
@@ -113,27 +114,6 @@ function fmt(v: number) {
 
 function formatVolume(v: number) {
   return v.toFixed(2);
-}
-
-function getSplitModeAmount(tx: TransactionWithRelations, mode: 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER') {
-  if (!Array.isArray(tx.split_payment_details)) return 0;
-  let total = 0;
-  for (const detail of tx.split_payment_details as unknown[]) {
-    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
-    const record = detail as Record<string, unknown>;
-    const selectedMode = typeof record.mode === 'string' ? record.mode : '';
-    const amount = typeof record.amount === 'number' ? record.amount : Number(record.amount);
-    if (selectedMode === mode && Number.isFinite(amount) && amount >= 0) {
-      total += amount;
-    }
-  }
-  return total;
-}
-
-function getPaymentModeAmount(tx: TransactionWithRelations, mode: 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER') {
-  if (tx.payment_mode === mode) return tx.total_amount ?? 0;
-  if (tx.payment_mode === 'SPLIT') return getSplitModeAmount(tx, mode);
-  return 0;
 }
 
 function csvEscape(value: string | number) {

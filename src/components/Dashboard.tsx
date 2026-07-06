@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
+import { getSplitModeAmount } from '../lib/payment';
 
 interface DashboardStats {
   totalSalesToday: number;
@@ -48,21 +49,6 @@ function formatCurrency(val: number) {
 
 function formatVolume(val: number) {
   return val.toFixed(2);
-}
-
-function getSplitModeAmount(tx: TransactionWithRelations, mode: 'GCASH' | 'BANK_TRANSFER') {
-  if (!Array.isArray(tx.split_payment_details)) return 0;
-  let total = 0;
-  for (const detail of tx.split_payment_details as unknown[]) {
-    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
-    const record = detail as Record<string, unknown>;
-    const selectedMode = typeof record.mode === 'string' ? record.mode : '';
-    const amount = typeof record.amount === 'number' ? record.amount : Number(record.amount);
-    if (selectedMode === mode && Number.isFinite(amount) && amount >= 0) {
-      total += amount;
-    }
-  }
-  return total;
 }
 
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];

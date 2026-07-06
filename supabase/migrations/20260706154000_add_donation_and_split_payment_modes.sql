@@ -7,7 +7,17 @@ ALTER TABLE transactions
   CHECK (payment_mode IN ('CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER', 'DONATION', 'SPLIT'));
 
 ALTER TABLE transactions
-  ADD COLUMN IF NOT EXISTS split_payment_details jsonb NOT NULL DEFAULT '[]'::jsonb;
+  ADD COLUMN IF NOT EXISTS split_payment_details jsonb;
+
+UPDATE transactions
+SET split_payment_details = '[]'::jsonb
+WHERE split_payment_details IS NULL;
+
+ALTER TABLE transactions
+  ALTER COLUMN split_payment_details SET DEFAULT '[]'::jsonb;
+
+ALTER TABLE transactions
+  ALTER COLUMN split_payment_details SET NOT NULL;
 
 ALTER TABLE transactions
   ADD CONSTRAINT transactions_split_payment_details_array_check

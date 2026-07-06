@@ -57,6 +57,7 @@ function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+const SPLIT_AMOUNT_TOLERANCE = 0.005;
 
 function formatVolume(v: number) {
   return v.toFixed(2);
@@ -388,7 +389,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
         if (hasInvalidAmount) {
           setSplitPaymentError('Split payment amounts must be valid numbers.');
           valid = false;
-        } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > 0.005) {
+        } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > SPLIT_AMOUNT_TOLERANCE) {
           setSplitPaymentError(`Split payment amounts must total ₱${fmt(grandTotal)}.`);
           valid = false;
         } else {

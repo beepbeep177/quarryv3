@@ -117,13 +117,17 @@ function formatVolume(v: number) {
 
 function getSplitModeAmount(tx: TransactionWithRelations, mode: 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER') {
   if (!Array.isArray(tx.split_payment_details)) return 0;
-  return tx.split_payment_details.reduce((sum, detail) => {
-    if (!detail || typeof detail !== 'object') return sum;
-    const selectedMode = 'mode' in detail ? String(detail.mode) : '';
-    const amount = 'amount' in detail ? Number(detail.amount) : NaN;
-    if (selectedMode !== mode || Number.isNaN(amount) || amount < 0) return sum;
-    return sum + amount;
-  }, 0);
+  let total = 0;
+  for (const detail of tx.split_payment_details as unknown[]) {
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
+    const record = detail as Record<string, unknown>;
+    const selectedMode = typeof record.mode === 'string' ? record.mode : '';
+    const amount = typeof record.amount === 'number' ? record.amount : Number(record.amount);
+    if (selectedMode === mode && Number.isFinite(amount) && amount >= 0) {
+      total += amount;
+    }
+  }
+  return total;
 }
 
 function getPaymentModeAmount(tx: TransactionWithRelations, mode: 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER') {

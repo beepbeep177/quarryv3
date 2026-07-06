@@ -57,6 +57,7 @@ function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+// Half-cent tolerance avoids false validation failures from floating-point decimal input arithmetic.
 const SPLIT_AMOUNT_TOLERANCE = 0.005;
 
 function formatVolume(v: number) {
@@ -882,6 +883,7 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
   const amt = productAmount(product);
   const total = productTotal(product);
   const n = (val: string) => parseFloat(val) || 0;
+  const unitPriceHintId = `unit-price-readonly-${index}`;
   const selectedPricingId = pricingList.find(p =>
     p.material_type === product.material_type && Number(p.unit_price) === n(product.unit_price)
   )?.id ?? '';
@@ -958,8 +960,12 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
             placeholder="0.00"
             value={product.unit_price}
             readOnly
+            aria-describedby={unitPriceHintId}
             className={`${inputCls(!!errors.unit_price)} bg-slate-100 cursor-not-allowed`}
           />
+          <p id={unitPriceHintId} className="sr-only">
+            Unit price is read-only and follows the selected product price below.
+          </p>
           <select
             value={selectedPricingId}
             onChange={e => {

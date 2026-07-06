@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
+import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
 
 interface AddEntryModalProps {
   onClose: () => void;
@@ -28,7 +29,13 @@ interface FormData {
   payment_mode: PaymentMode;
   status: TransactionStatus;
   notes: string;
+  split_payment_details: SplitPaymentDetailInput[];
   products: ProductRow[];
+}
+
+interface SplitPaymentDetailInput {
+  mode: SplitPaymentMode;
+  amount: string;
 }
 
 const todayDate = new Date().toISOString().split('T')[0];
@@ -48,6 +55,10 @@ function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
     kulot: '0',
   };
 }
+
+const round2 = (value: number) => Math.round(value * 100) / 100;
+// Half-cent tolerance avoids false validation failures from floating-point decimal input arithmetic.
+const SPLIT_AMOUNT_TOLERANCE = 0.005;
 
 function formatVolume(v: number) {
   return v.toFixed(2);
@@ -71,10 +82,24 @@ const EMPTY_FORM: FormData = {
   payment_mode: 'CASH',
   status: 'PAID',
   notes: '',
+  split_payment_details: [],
   products: [emptyProduct()],
 };
 
 function txToForm(tx: TransactionWithRelations): FormData {
+  const splitPaymentDetails = Array.isArray(tx.split_payment_details)
+    ? tx.split_payment_details
+        .map(item => {
+          const mode = item && typeof item === 'object' && 'mode' in item ? String(item.mode) : '';
+          const amount = item && typeof item === 'object' && 'amount' in item ? Number(item.amount) : NaN;
+          const isValidMode = SPLIT_PAYMENT_MODES.includes(mode as SplitPaymentMode);
+          if (!isValidMode || Number.isNaN(amount) || amount < 0) return null;
+          return { mode: mode as SplitPaymentMode, amount: String(amount) };
+        })
+        .filter((item): item is SplitPaymentDetailInput => !!item)
+        .slice(0, 2)
+    : [];
+
   return {
     customer_id: tx.customer_id,
     truck_id: tx.truck_id,
@@ -82,6 +107,7 @@ function txToForm(tx: TransactionWithRelations): FormData {
     payment_mode: tx.payment_mode,
     status: tx.status,
     notes: tx.notes ?? '',
+    split_payment_details: splitPaymentDetails,
     products: [{
       dr_number: tx.dr_number,
       material_type: tx.material_type ?? '',
@@ -111,6 +137,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const [existingAttachmentUrls, setExistingAttachmentUrls] = useState<string[]>(transaction?.attachment_urls ?? []);
   const [newAttachmentFiles, setNewAttachmentFiles] = useState<File[]>([]);
   const [showZeroPriceWarning, setShowZeroPriceWarning] = useState(false);
+  const [splitPaymentError, setSplitPaymentError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -140,6 +167,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     setExistingAttachmentUrls(transaction?.attachment_urls ?? []);
     setNewAttachmentFiles([]);
     setShowZeroPriceWarning(false);
+    setSplitPaymentError(null);
   }, [transaction]);
 
   useEffect(() => {
@@ -201,11 +229,18 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
   const productTotal = useCallback((p: ProductRow) => productAmount(p) + n(p.dr_capitol) + n(p.passway) + n(p.kulot), [productAmount]);
 
-  const grandTotal = form.products.reduce((sum, p) => sum + productTotal(p), 0);
+  const rawGrandTotal = form.products.reduce((sum, p) => sum + productTotal(p), 0);
+  const isDonationMode = form.payment_mode === 'DONATION';
+  const grandTotal = isDonationMode ? 0 : rawGrandTotal;
 
-  const setHeader = (key: keyof Omit<FormData, 'products'>, val: string) => {
+  const setHeader = (key: keyof Omit<FormData, 'products' | 'split_payment_details'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
-    setHeaderErrors(e => ({ ...e, [key]: undefined }));
+    if (key === 'customer_id' || key === 'truck_id') {
+      setHeaderErrors(e => ({ ...e, [key]: undefined }));
+    }
+    if (key === 'payment_mode') {
+      setSplitPaymentError(null);
+    }
   };
 
   const handleCustomerChange = (customerId: string) => {
@@ -219,6 +254,50 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
       products: f.products.map((p, i) => i === index ? { ...p, [key]: val } : p),
     }));
     setProductErrors(errs => errs.map((e, i) => i === index ? { ...e, [key]: undefined } : e));
+  };
+
+  const splitModes: SplitPaymentMode[] = [...SPLIT_PAYMENT_MODES];
+
+  const autoSplitAmounts = useCallback((modes: SplitPaymentMode[], total: number): SplitPaymentDetailInput[] => {
+    if (modes.length === 0) return [];
+    const safeTotal = Math.max(0, round2(total));
+    const base = round2(safeTotal / modes.length);
+    let allocated = 0;
+    return modes.map((mode, index) => {
+      const amount = index === modes.length - 1 ? round2(safeTotal - allocated) : base;
+      allocated = round2(allocated + amount);
+      return { mode, amount: amount.toFixed(2) };
+    });
+  }, []);
+
+  const toggleSplitMode = (mode: SplitPaymentMode) => {
+    setForm(current => {
+      const isSelected = current.split_payment_details.some(detail => detail.mode === mode);
+      let modes = current.split_payment_details.map(detail => detail.mode);
+
+      if (isSelected) {
+        modes = modes.filter(selectedMode => selectedMode !== mode);
+      } else {
+        if (modes.length >= 2) return current;
+        modes = [...modes, mode];
+      }
+
+      return {
+        ...current,
+        split_payment_details: autoSplitAmounts(modes, grandTotal),
+      };
+    });
+    setSplitPaymentError(null);
+  };
+
+  const setSplitAmount = (mode: SplitPaymentMode, value: string) => {
+    setForm(current => ({
+      ...current,
+      split_payment_details: current.split_payment_details.map(detail =>
+        detail.mode === mode ? { ...detail, amount: value } : detail
+      ),
+    }));
+    setSplitPaymentError(null);
   };
 
   const truckDimensions = useCallback((truck: Truck | undefined): Pick<ProductRow, 'length_cm' | 'width_cm' | 'height_cm'> => ({
@@ -300,10 +379,32 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
     });
     setProductErrors(pErrs);
 
+    if (form.payment_mode === 'SPLIT') {
+      if (form.split_payment_details.length !== 2) {
+        setSplitPaymentError('Select exactly 2 payment modes for split payment.');
+        valid = false;
+      } else {
+        const splitAmounts = form.split_payment_details.map(detail => Number(detail.amount));
+        const hasInvalidAmount = splitAmounts.some(amount => Number.isNaN(amount) || amount < 0);
+        const totalSplitAmount = splitAmounts.reduce((sum, amount) => sum + (Number.isNaN(amount) ? 0 : amount), 0);
+        if (hasInvalidAmount) {
+          setSplitPaymentError('Split payment amounts must be valid numbers.');
+          valid = false;
+        } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > SPLIT_AMOUNT_TOLERANCE) {
+          setSplitPaymentError(`Split payment amounts must total ₱${fmt(grandTotal)}.`);
+          valid = false;
+        } else {
+          setSplitPaymentError(null);
+        }
+      }
+    } else {
+      setSplitPaymentError(null);
+    }
+
     return valid;
   }
 
-  const hasZeroUnitPrice = form.products.some(product => product.unit_price !== '' && n(product.unit_price) === 0);
+  const hasZeroUnitPrice = !isDonationMode && form.products.some(product => product.unit_price !== '' && n(product.unit_price) === 0);
 
   async function uploadNewAttachments() {
     const uploadedPaths: string[] = [];
@@ -346,6 +447,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
       if (isEditing) {
         const p = form.products[0];
+        const splitDetails = form.payment_mode === 'SPLIT'
+          ? form.split_payment_details.map(detail => ({
+              mode: detail.mode,
+              amount: round2(Number(detail.amount) || 0),
+            }))
+          : [];
         const payload = {
           transaction_date: form.transaction_date,
           customer_id: form.customer_id,
@@ -355,18 +462,28 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           length_cm: n(p.length_cm),
           width_cm: n(p.width_cm),
           height_cm: n(p.height_cm),
-          unit_price: n(p.unit_price),
-          dr_capitol: n(p.dr_capitol),
-          passway: n(p.passway),
-          kulot: n(p.kulot),
+          unit_price: isDonationMode ? 0 : n(p.unit_price),
+          dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+          passway: isDonationMode ? 0 : n(p.passway),
+          kulot: isDonationMode ? 0 : n(p.kulot),
           payment_mode: form.payment_mode,
-          status: form.status,
+          status: isDonationMode ? 'PAID' : form.status,
           notes: form.notes,
           attachment_urls: attachmentUrls,
+          split_payment_details: splitDetails,
         };
         const { error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id);
         if (error) throw new Error(error.message || 'Failed to save. Please try again.');
       } else {
+        const splitDetails = form.payment_mode === 'SPLIT'
+          ? form.split_payment_details.map(detail => ({
+              mode: detail.mode,
+              amount: round2(Number(detail.amount) || 0),
+            }))
+          : [];
+        const splitRatios = grandTotal > 0
+          ? splitDetails.map(detail => detail.amount / grandTotal)
+          : splitDetails.map(() => 0);
         const rows = form.products.map(p => ({
           transaction_date: form.transaction_date,
           customer_id: form.customer_id,
@@ -376,14 +493,27 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           length_cm: n(p.length_cm),
           width_cm: n(p.width_cm),
           height_cm: n(p.height_cm),
-          unit_price: n(p.unit_price),
-          dr_capitol: n(p.dr_capitol),
-          passway: n(p.passway),
-          kulot: n(p.kulot),
+          unit_price: isDonationMode ? 0 : n(p.unit_price),
+          dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+          passway: isDonationMode ? 0 : n(p.passway),
+          kulot: isDonationMode ? 0 : n(p.kulot),
           payment_mode: form.payment_mode,
-          status: (form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
+          status: (isDonationMode || form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
           notes: form.notes,
           attachment_urls: attachmentUrls,
+          split_payment_details: form.payment_mode === 'SPLIT'
+            ? (() => {
+                const rowTotal = productTotal(p);
+                let allocated = 0;
+                return splitDetails.map((detail, index) => {
+                  const amount = index === splitDetails.length - 1
+                    ? round2(rowTotal - allocated)
+                    : round2(rowTotal * splitRatios[index]);
+                  allocated = round2(allocated + amount);
+                  return { mode: detail.mode, amount };
+                });
+              })()
+            : [],
         }));
         const { error } = await supabase.from('transactions').insert(rows);
         if (error) throw new Error(error.message || 'Failed to save. Please try again.');
@@ -411,16 +541,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const paymentModes: PaymentMode[] = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'];
-
-  const paymentModeColor = (mode: PaymentMode, active: boolean) => {
-    if (!active) return 'border-slate-200 text-slate-500 hover:border-slate-300 bg-white';
-    if (mode === 'CASH') return 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200';
-    if (mode === 'P.O') return 'bg-amber-500 border-amber-500 text-white shadow-sm shadow-amber-200';
-    if (mode === 'GCASH') return 'bg-blue-500 border-blue-500 text-white shadow-sm shadow-blue-200';
-    if (mode === 'BANK_TRANSFER') return 'bg-violet-500 border-violet-500 text-white shadow-sm shadow-violet-200';
-    return 'bg-slate-600 border-slate-600 text-white';
-  };
+  const paymentModes: PaymentMode[] = [...PAYMENT_MODES];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -474,21 +595,71 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           </div>
 
           {/* Payment Mode */}
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Mode of Payment</p>
-            <div className="flex gap-2 flex-wrap">
+          <Field label="Mode of Payment">
+            <select
+              value={form.payment_mode}
+              onChange={e => setHeader('payment_mode', e.target.value)}
+              className={selectCls(false)}
+            >
               {paymentModes.map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setHeader('payment_mode', mode)}
-                  className={`flex-1 min-w-[80px] py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${paymentModeColor(mode, form.payment_mode === mode)}`}
-                >
-                  {mode === 'BANK_TRANSFER' ? 'BANK' : mode}
-                </button>
+                <option key={mode} value={mode}>
+                  {mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : mode}
+                </option>
               ))}
+            </select>
+          </Field>
+
+          {form.payment_mode === 'SPLIT' && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-3">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Split Payment (select 2)</p>
+              <div className="flex gap-2 flex-wrap">
+                {splitModes.map(mode => {
+                  const active = form.split_payment_details.some(detail => detail.mode === mode);
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => toggleSplitMode(mode)}
+                      className={`flex-1 min-w-[88px] py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                        active
+                          ? mode === 'CASH'
+                            ? 'bg-emerald-500 border-emerald-500 text-white'
+                            : mode === 'P.O'
+                              ? 'bg-amber-500 border-amber-500 text-white'
+                              : mode === 'GCASH'
+                                ? 'bg-blue-500 border-blue-500 text-white'
+                                : mode === 'BANK_TRANSFER'
+                                  ? 'bg-violet-500 border-violet-500 text-white'
+                                  : 'bg-slate-600 border-slate-600 text-white'
+                          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                      }`}
+                    >
+                      {mode === 'BANK_TRANSFER' ? 'BANK' : mode}
+                    </button>
+                  );
+                })}
+              </div>
+              {form.split_payment_details.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {form.split_payment_details.map(detail => (
+                    <Field key={detail.mode} label={`${detail.mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : detail.mode} Amount`}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={detail.amount}
+                        onChange={e => setSplitAmount(detail.mode, e.target.value)}
+                        className={inputCls(false)}
+                      />
+                    </Field>
+                  ))}
+                </div>
+              )}
+              {splitPaymentError && (
+                <p className="text-xs text-red-500">{splitPaymentError}</p>
+              )}
             </div>
-          </div>
+          )}
 
           {/* Status (edit mode only) */}
           {isEditing && (
@@ -712,6 +883,7 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
   const amt = productAmount(product);
   const total = productTotal(product);
   const n = (val: string) => parseFloat(val) || 0;
+  const unitPriceHintId = `unit-price-readonly-${index}`;
   const selectedPricingId = pricingList.find(p =>
     p.material_type === product.material_type && Number(p.unit_price) === n(product.unit_price)
   )?.id ?? '';
@@ -787,9 +959,13 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
             min="0"
             placeholder="0.00"
             value={product.unit_price}
-            onChange={e => onChange('unit_price', e.target.value)}
-            className={inputCls(!!errors.unit_price)}
+            readOnly
+            aria-describedby={unitPriceHintId}
+            className={`${inputCls(!!errors.unit_price)} bg-slate-100 cursor-not-allowed`}
           />
+          <p id={unitPriceHintId} className="sr-only">
+            Unit price is read-only and follows the selected product price below.
+          </p>
           <select
             value={selectedPricingId}
             onChange={e => {

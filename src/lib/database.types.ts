@@ -2,7 +2,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER';
+export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' | 'DONATION' | 'SPLIT';
 export type TransactionStatus = 'PENDING' | 'PAID';
 
 export type Database = {
@@ -163,6 +163,7 @@ export type Database = {
           status: TransactionStatus;
           notes: string;
           attachment_urls: string[];
+          split_payment_details: Json;
           created_at: string;
         };
         Insert: {
@@ -182,6 +183,7 @@ export type Database = {
           status?: TransactionStatus;
           notes?: string;
           attachment_urls?: string[];
+          split_payment_details?: Json;
         };
         Update: {
           transaction_date?: string;
@@ -200,6 +202,7 @@ export type Database = {
           status?: TransactionStatus;
           notes?: string;
           attachment_urls?: string[];
+          split_payment_details?: Json;
         };
         Relationships: [
           {

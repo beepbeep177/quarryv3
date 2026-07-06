@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import { getPaymentModeAmount } from '../lib/payment';
 
 export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
@@ -450,11 +451,11 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
       bucketMap[bucketStart].volume += tx.volume_m3 ?? 0;
       bucketMap[bucketStart].total += tx.total_amount ?? 0;
 
-      if (tx.payment_mode === 'CASH') bucketMap[bucketStart].cash += tx.total_amount ?? 0;
-      else if (tx.payment_mode === 'P.O') bucketMap[bucketStart].po += tx.total_amount ?? 0;
-      else if (tx.payment_mode === 'GCASH') bucketMap[bucketStart].gcash += tx.total_amount ?? 0;
-      else if (tx.payment_mode === 'BANK_TRANSFER') bucketMap[bucketStart].bankTransfer += tx.total_amount ?? 0;
-      else bucketMap[bucketStart].offset += tx.total_amount ?? 0;
+      bucketMap[bucketStart].cash += getPaymentModeAmount(tx, 'CASH');
+      bucketMap[bucketStart].po += getPaymentModeAmount(tx, 'P.O');
+      bucketMap[bucketStart].offset += getPaymentModeAmount(tx, 'OFFSET');
+      bucketMap[bucketStart].gcash += getPaymentModeAmount(tx, 'GCASH');
+      bucketMap[bucketStart].bankTransfer += getPaymentModeAmount(tx, 'BANK_TRANSFER');
     });
 
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
@@ -462,11 +463,11 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
 
   const grandTotal = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const grandVolume = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [transactions]);
-  const cashTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'CASH').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
-  const poTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'P.O').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
-  const offsetTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'OFFSET').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
-  const gcashTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'GCASH').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
-  const bankTransferTotal = useMemo(() => transactions.filter(tx => tx.payment_mode === 'BANK_TRANSFER').reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
+  const cashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'CASH'), 0), [transactions]);
+  const poTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'P.O'), 0), [transactions]);
+  const offsetTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'OFFSET'), 0), [transactions]);
+  const gcashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'GCASH'), 0), [transactions]);
+  const bankTransferTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'BANK_TRANSFER'), 0), [transactions]);
 
   const expenseSummaryList = useMemo(() => {
     const bucketMap: Record<string, ExpenseSummaryRow> = {};
@@ -888,9 +889,15 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
                           ? 'bg-violet-100 text-violet-700'
                           : selectedTransaction.payment_mode === 'OFFSET'
                             ? 'bg-pink-100 text-pink-700'
+                            : selectedTransaction.payment_mode === 'DONATION'
+                            ? 'bg-rose-100 text-rose-700'
+                            : selectedTransaction.payment_mode === 'SPLIT'
+                              ? 'bg-cyan-100 text-cyan-700'
                             : 'bg-slate-100 text-slate-600'
                 }`}>
-                  {selectedTransaction.payment_mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : selectedTransaction.payment_mode}
+                  {selectedTransaction.payment_mode === 'BANK_TRANSFER'
+                    ? 'BANK TRANSFER'
+                    : selectedTransaction.payment_mode}
                 </span>
               </div>
 
@@ -1121,6 +1128,8 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
                 <option value="GCASH">GCash</option>
                 <option value="BANK_TRANSFER">Bank Transfer</option>
                 <option value="OFFSET">Offset</option>
+                <option value="DONATION">Donation</option>
+                <option value="SPLIT">Split</option>
               </select>
               {materialTypeOptions.length > 0 && (
                 <select
@@ -1476,11 +1485,17 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
                                     ? 'bg-violet-100 text-violet-700'
                                     : tx.payment_mode === 'OFFSET'
                                       ? 'bg-pink-100 text-pink-700'
+                                        : tx.payment_mode === 'DONATION'
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : tx.payment_mode === 'SPLIT'
+                                        ? 'bg-cyan-100 text-cyan-700'
                                       : 'bg-slate-100 text-slate-600'
                           }`}
                         >
                           {tx.payment_mode === 'BANK_TRANSFER'
                             ? 'BANK'
+                            : tx.payment_mode === 'DONATION'
+                              ? 'DONATE'
                             : tx.payment_mode || '—'}
                         </span>
                       </td>

@@ -466,7 +466,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
   }, [transactions, range.salesGrouping]);
 
-  const grandTotal = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0), [transactions]);
+  const grandNetSales = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0), [transactions]);
   const grandExtraFees = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0) + (tx.passway ?? 0) + (tx.kulot ?? 0), 0), [transactions]);
   const grandTotalWithFees = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const grandVolume = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [transactions]);
@@ -663,7 +663,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
           fmt(summary.extraFees),
           fmt(summary.total),
         ]),
-        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandExtraFees), fmt(grandTotal)],
+        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandExtraFees), fmt(grandNetSales)],
       };
     }
 
@@ -755,7 +755,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
     expenseCategoryTotals,
     gcashTotal,
     grandExtraFees,
-    grandTotal,
+    grandNetSales,
     grandTotalWithFees,
     grandVolume,
     materialTypeFilter,
@@ -1235,10 +1235,11 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
 
       {activeTab === 'sales' && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
             {[
-              { label: 'Net Sales', value: `₱${fmt(grandTotal)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
+              { label: 'Net Sales', value: `₱${fmt(grandNetSales)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'Extra Fees', value: `₱${fmt(grandExtraFees)}`, icon: <ReceiptText size={18} className="text-orange-500" />, bg: 'bg-orange-50' },
+              { label: 'Total Volume', value: `${formatVolume(grandVolume)} m³`, icon: <Layers size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
               { label: 'Cash Sales', value: `₱${fmt(cashTotal)}`, icon: <TrendingUp size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'P.O Receivable', value: `₱${fmt(poTotal)}`, icon: <ReceiptText size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
               { label: 'GCash Sales', value: `₱${fmt(gcashTotal)}`, icon: <Banknote size={18} className="text-blue-500" />, bg: 'bg-blue-50' },
@@ -1311,7 +1312,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
                       <td className="px-4 py-3 text-right text-blue-400 font-semibold tabular-nums">₱{fmt(gcashTotal)}</td>
                       <td className="px-4 py-3 text-right text-violet-400 font-semibold tabular-nums">₱{fmt(bankTransferTotal)}</td>
                       <td className="px-4 py-3 text-right text-orange-400 font-semibold tabular-nums">₱{fmt(grandExtraFees)}</td>
-                      <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandTotal)}</td>
+                      <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandNetSales)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1730,7 +1731,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
                   <tfoot>
                     <tr className="bg-slate-900">
                       <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Totals</td>
-                      <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">₱{fmt(grandTotal)}</td>
+                      <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">₱{fmt(grandTotalWithFees)}</td>
                       <td className="px-4 py-3 text-right text-red-300 font-bold tabular-nums">₱{fmt(totalExpenses)}</td>
                       <td className={`px-4 py-3 text-right font-bold tabular-nums ${netIncome >= 0 ? 'text-white' : 'text-red-300'}`}>₱{fmt(netIncome)}</td>
                     </tr>

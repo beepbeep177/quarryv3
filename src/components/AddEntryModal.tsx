@@ -388,7 +388,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
         if (hasInvalidAmount) {
           setSplitPaymentError('Split payment amounts must be valid numbers.');
           valid = false;
-        } else if (round2(totalSplitAmount) !== round2(grandTotal)) {
+        } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > 0.005) {
           setSplitPaymentError(`Split payment amounts must total ₱${fmt(grandTotal)}.`);
           valid = false;
         } else {
@@ -479,7 +479,9 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
               amount: round2(Number(detail.amount) || 0),
             }))
           : [];
-        const splitRatios = splitDetails.map(detail => detail.amount / (grandTotal || 1));
+        const splitRatios = grandTotal > 0
+          ? splitDetails.map(detail => detail.amount / grandTotal)
+          : splitDetails.map(() => 0);
         const rows = form.products.map(p => ({
           transaction_date: form.transaction_date,
           customer_id: form.customer_id,

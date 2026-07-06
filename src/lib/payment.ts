@@ -12,7 +12,11 @@ export function getSplitModeAmount(tx: TransactionWithRelations, mode: SplitPaym
     if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
     const record = detail as Record<string, unknown>;
     const selectedMode = typeof record.mode === 'string' ? record.mode : '';
-    const amount = typeof record.amount === 'number' ? record.amount : Number(record.amount);
+    const amount = typeof record.amount === 'number'
+      ? record.amount
+      : typeof record.amount === 'string'
+        ? parseFloat(record.amount)
+        : NaN;
     if (selectedMode === mode && Number.isFinite(amount) && amount >= 0) {
       total += amount;
     }

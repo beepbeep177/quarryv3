@@ -5,7 +5,12 @@ import WeeklyAnalytics from './WeeklyAnalytics';
 import ExpensesLedger from './ExpensesLedger';
 import ReadOnlyNotice from './ReadOnlyNotice';
 
-export default function Expenses({ readOnly = false }: { readOnly?: boolean }) {
+interface ExpensesProps {
+  canAdd?: boolean;
+  canDelete?: boolean;
+}
+
+export default function Expenses({ canAdd = false, canDelete = false }: ExpensesProps) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   function handleExpenseSuccess() {
@@ -24,21 +29,21 @@ export default function Expenses({ readOnly = false }: { readOnly?: boolean }) {
         <p className="text-slate-500 text-sm">Track and manage daily operational expenses</p>
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can review expenses and analytics, but only managers can add or remove expense records." />}
+      {!canAdd && !canDelete && <ReadOnlyNotice message="This user group can review expenses and analytics only." />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {!readOnly && (
+        {canAdd && (
           <div className="lg:col-span-2">
             <ExpenseForm onSuccess={handleExpenseSuccess} />
           </div>
         )}
 
-        <div className={readOnly ? 'lg:col-span-3' : ''}>
+        <div className={!canAdd ? 'lg:col-span-3' : ''}>
           <WeeklyAnalytics refreshKey={refreshKey} />
         </div>
       </div>
 
-      <ExpensesLedger refreshKey={refreshKey} readOnly={readOnly} />
+      <ExpensesLedger refreshKey={refreshKey} canDelete={canDelete} />
     </div>
   );
 }

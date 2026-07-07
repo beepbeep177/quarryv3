@@ -8,7 +8,13 @@ import { paginate } from '../lib/pagination';
 
 const PAGE_SIZE = 12;
 
-export default function CustomersList({ readOnly = false }: { readOnly?: boolean }) {
+interface CustomersListProps {
+  canAdd?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+}
+
+export default function CustomersList({ canAdd = false, canEdit = false, canDelete = false }: CustomersListProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -16,12 +22,14 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
   const [form, setForm] = useState({ name: '', contact: '', address: '' });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ name?: string }>({});
+  const [saveError, setSaveError] = useState('');
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [editForm, setEditForm] = useState({ name: '', contact: '', address: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ name?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const canManage = canAdd || canEdit || canDelete;
 
   useEffect(() => { fetchCustomers(); }, []);
   useEffect(() => { setPage(1); }, [search]);
@@ -35,10 +43,15 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
+    setSaveError('');
     if (!form.name.trim()) { setErrors({ name: 'Required' }); return; }
     setSaving(true);
-    const { data } = await supabase.from('customers').insert({ name: form.name.trim(), contact: form.contact, address: form.address }).select().maybeSingle();
+    const { data, error } = await supabase.from('customers').insert({ name: form.name.trim(), contact: form.contact, address: form.address }).select().maybeSingle();
     setSaving(false);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
     if (data) {
       setCustomers(prev => [...prev, data as Customer].sort((a, b) => a.name.localeCompare(b.name)));
       setForm({ name: '', contact: '', address: '' });
@@ -60,15 +73,20 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
 
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSaveError('');
     if (!editForm.name.trim()) { setEditErrors({ name: 'Required' }); return; }
     setEditSaving(true);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .update({ name: editForm.name.trim(), contact: editForm.contact, address: editForm.address })
       .eq('id', editingCustomer!.id)
       .select()
       .maybeSingle();
     setEditSaving(false);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
     if (data) {
       setCustomers(prev =>
         prev.map(c => c.id === editingCustomer!.id ? data as Customer : c)
@@ -80,8 +98,14 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this customer? This cannot be undone.')) return;
+    setSaveError('');
     setDeletingId(id);
-    await supabase.from('customers').delete().eq('id', id);
+    const { error } = await supabase.from('customers').delete().eq('id', id);
+    if (error) {
+      setSaveError(error.message);
+      setDeletingId(null);
+      return;
+    }
     setCustomers(prev => prev.filter(c => c.id !== id));
     setDeletingId(null);
   }
@@ -100,7 +124,7 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
           <h1 className="text-2xl font-bold text-slate-800">Customers</h1>
           <p className="text-slate-500 text-sm mt-0.5">{customers.length} registered customer{customers.length !== 1 ? 's' : ''}</p>
         </div>
-        {!readOnly && (
+        {canAdd && (
           <button
             onClick={() => setShowForm(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
@@ -111,9 +135,9 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
         )}
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can search and review customer records, but only managers can maintain them." />}
+      {!canManage && <ReadOnlyNotice message="This user group can search and review customer records only." />}
 
-      {showForm && !readOnly && (
+      {showForm && canAdd && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Customer</h2>
@@ -149,6 +173,12 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {saveError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {saveError}
         </div>
       )}
 
@@ -222,23 +252,27 @@ export default function CustomersList({ readOnly = false }: { readOnly?: boolean
                       </div>
                     )}
                   </div>
-                  {!readOnly && (
+                  {(canEdit || canDelete) && (
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                      <button
-                        onClick={() => startEdit(c)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                        title="Edit"
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(c.id)}
-                        disabled={deletingId === c.id}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
-                        title="Delete"
-                      >
-                        {deletingId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => startEdit(c)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                          title="Edit"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => handleDelete(c.id)}
+                          disabled={deletingId === c.id}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                          title="Delete"
+                        >
+                          {deletingId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

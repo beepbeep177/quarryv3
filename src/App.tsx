@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -18,13 +18,46 @@ import type { TransactionWithRelations } from './lib/database.types';
 import type { ReportTab } from './components/Reports';
 
 export default function App() {
-  const { user, role, isManager, loading, signOut } = useAuth();
+  const { user, role, isManager, loading, signOut, can } = useAuth();
   const [activeSection, setActiveSection] = useState<NavSection>(isManager ? 'dashboard' : 'daily-view');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<TransactionWithRelations | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [reportTab, setReportTab] = useState<ReportTab>('sales');
-  const canManageRecords = !!role;
+  const canAddDailyLedger = can('DAILY_LEDGER_ADD');
+  const canEditDailyLedger = can('DAILY_LEDGER_EDIT');
+  const canDeleteDailyLedger = can('DAILY_LEDGER_DELETE');
+  const canUploadDailyLedger = can('DAILY_LEDGER_UPLOAD');
+  const canViewSection: Record<NavSection, boolean> = {
+    dashboard: can('DASHBOARD_VIEW'),
+    'daily-add': canAddDailyLedger,
+    'daily-view': can('DAILY_LEDGER_VIEW'),
+    'customers-list': can('CUSTOMERS_VIEW'),
+    'customers-ar': can('ACCOUNTS_RECEIVABLE_VIEW'),
+    'logistics-trucks': can('TRUCKS_VIEW'),
+    'logistics-pricing': can('PRICING_VIEW'),
+    expenses: can('EXPENSES_VIEW'),
+    reports: can('REPORTS_VIEW'),
+    'access-control': can('USER_GROUP_ACCESS_VIEW') || can('USER_GROUP_ACCESS_MANAGE') || can('USER_ACCOUNTS_MANAGE') || can('AUDIT_LOG_VIEW'),
+  };
+
+  useEffect(() => {
+    if (loading || canViewSection[activeSection]) return;
+
+    const fallback = ([
+      'dashboard',
+      'daily-view',
+      'customers-list',
+      'customers-ar',
+      'logistics-trucks',
+      'logistics-pricing',
+      'expenses',
+      'reports',
+      'access-control',
+    ] as NavSection[]).find(section => canViewSection[section]);
+
+    if (fallback) setActiveSection(fallback);
+  }, [activeSection, canViewSection, loading]);
 
   function handleEditTransaction(tx: TransactionWithRelations) {
     setEditingTransaction(tx);
@@ -52,14 +85,12 @@ export default function App() {
   }
 
   function handleNavigate(section: NavSection) {
-    // Operators cannot access manager-only sections
-    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control' || section === 'logistics-pricing')) {
+    if (!canViewSection[section]) {
       return;
     }
 
     if (section === 'daily-add') {
-      // Only managers can add daily transactions
-      if (isManager) setShowAddModal(true);
+      if (canAddDailyLedger) setShowAddModal(true);
       setActiveSection('daily-view');
       return;
     }
@@ -72,6 +103,7 @@ export default function App() {
   }
 
   function openProductReport() {
+    if (!can('REPORTS_VIEW')) return;
     setReportTab('products');
     setActiveSection('reports');
   }
@@ -90,7 +122,7 @@ export default function App() {
       <Sidebar
         activeSection={activeSection}
         onNavigate={handleNavigate}
-        isManager={isManager}
+        can={can}
       />
 
       <main className="flex-1 overflow-auto flex flex-col">
@@ -122,24 +154,26 @@ export default function App() {
                 onNavigate={handleNavigate}
                 onOpenProductReport={openProductReport}
                 refreshKey={refreshKey}
-                canManageRecords={canManageRecords}
+                canManageRecords={canAddDailyLedger}
               />
             )}
             {activeSection === 'daily-view' && (
               <DailyLedger
-                onAddEntry={() => isManager && setShowAddModal(true)}
+                onAddEntry={() => canAddDailyLedger && setShowAddModal(true)}
                 onEditEntry={handleEditTransaction}
                 refreshKey={refreshKey}
-                readOnly={!isManager}
+                canAdd={canAddDailyLedger}
+                canEdit={canEditDailyLedger}
+                canDelete={canDeleteDailyLedger}
               />
             )}
-            {activeSection === 'customers-list' && <CustomersList readOnly={!canManageRecords} />}
-            {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!isManager} />}
-            {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
-            {activeSection === 'logistics-pricing' && isManager && <PricingList readOnly={!isManager} />}
-            {activeSection === 'expenses' && <Expenses readOnly={!isManager} />}
-            {activeSection === 'reports' && <Reports initialTab={reportTab} />}
-            {activeSection === 'access-control' && isManager && <AccessControl />}
+            {activeSection === 'customers-list' && <CustomersList canAdd={can('CUSTOMERS_ADD')} canEdit={can('CUSTOMERS_EDIT')} canDelete={can('CUSTOMERS_DELETE')} />}
+            {activeSection === 'customers-ar' && <AccountsReceivable canEdit={can('ACCOUNTS_RECEIVABLE_EDIT')} />}
+            {activeSection === 'logistics-trucks' && <TruckList canAdd={can('TRUCKS_ADD')} canEdit={can('TRUCKS_EDIT')} canDelete={can('TRUCKS_DELETE')} />}
+            {activeSection === 'logistics-pricing' && <PricingList canAdd={can('PRICING_ADD')} canEdit={can('PRICING_EDIT')} canDelete={can('PRICING_DELETE')} />}
+            {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canDelete={can('EXPENSES_DELETE')} />}
+            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} />}
+            {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
           </div>
         </div>
       </main>
@@ -149,6 +183,7 @@ export default function App() {
           onClose={handleModalClose}
           onSuccess={handleAddSuccess}
           transaction={editingTransaction ?? undefined}
+          canUploadAttachments={canUploadDailyLedger}
         />
       )}
     </div>

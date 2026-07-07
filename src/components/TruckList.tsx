@@ -16,7 +16,13 @@ function formatVolume(v: number) {
   return v.toFixed(2);
 }
 
-export default function TruckList({ readOnly = false }: { readOnly?: boolean }) {
+interface TruckListProps {
+  canAdd?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+}
+
+export default function TruckList({ canAdd = false, canEdit = false, canDelete = false }: TruckListProps) {
   const [trucks, setTrucks] = useState<TruckWithCustomer[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,12 +31,14 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
   const [form, setForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ plate_number?: string }>({});
+  const [saveError, setSaveError] = useState('');
   const [editingTruck, setEditingTruck] = useState<TruckWithCustomer | null>(null);
   const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const canManage = canAdd || canEdit || canDelete;
 
   useEffect(() => { fetchTrucks(); }, []);
   useEffect(() => { setPage(1); }, [search]);
@@ -48,12 +56,13 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
+    setSaveError('');
     if (!form.plate_number.trim()) { setErrors({ plate_number: 'Required' }); return; }
     setSaving(true);
     const l = parseFloat(form.length_cm) || 0;
     const w = parseFloat(form.width_cm) || 0;
     const h = parseFloat(form.height_cm) || 0;
-    const { data } = await supabase.from('trucks').insert({
+    const { data, error } = await supabase.from('trucks').insert({
       plate_number: form.plate_number.trim().toUpperCase(),
       driver_name: form.driver_name,
       customer_id: form.customer_id || null,
@@ -63,6 +72,10 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
       capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
     }).select('*, customers(*)').maybeSingle();
     setSaving(false);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
     if (data) {
       setTrucks(prev => [...prev, data as TruckWithCustomer].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
       setForm({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
@@ -91,12 +104,13 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
 
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSaveError('');
     if (!editForm.plate_number.trim()) { setEditErrors({ plate_number: 'Required' }); return; }
     setEditSaving(true);
     const l = parseFloat(editForm.length_cm) || 0;
     const w = parseFloat(editForm.width_cm) || 0;
     const h = parseFloat(editForm.height_cm) || 0;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('trucks')
       .update({
         plate_number: editForm.plate_number.trim().toUpperCase(),
@@ -111,6 +125,10 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
       .select('*, customers(*)')
       .maybeSingle();
     setEditSaving(false);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
     if (data) {
       setTrucks(prev =>
         prev.map(t => t.id === editingTruck!.id ? data as TruckWithCustomer : t)
@@ -122,8 +140,14 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this truck? This cannot be undone.')) return;
+    setSaveError('');
     setDeletingId(id);
-    await supabase.from('trucks').delete().eq('id', id);
+    const { error } = await supabase.from('trucks').delete().eq('id', id);
+    if (error) {
+      setSaveError(error.message);
+      setDeletingId(null);
+      return;
+    }
     setTrucks(prev => prev.filter(t => t.id !== id));
     setDeletingId(null);
   }
@@ -146,7 +170,7 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
           <h1 className="text-2xl font-bold text-slate-800">Truck List</h1>
           <p className="text-slate-500 text-sm mt-0.5">{trucks.length} registered truck{trucks.length !== 1 ? 's' : ''}</p>
         </div>
-        {!readOnly && (
+        {canAdd && (
           <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
             <PlusCircle size={16} />
             Add Truck
@@ -154,9 +178,9 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
         )}
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can review truck details, but only managers can add, edit, or delete trucks." />}
+      {!canManage && <ReadOnlyNotice message="This user group can review truck details only." />}
 
-      {showForm && !readOnly && (
+      {showForm && canAdd && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Truck</h2>
@@ -212,6 +236,12 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
         </div>
       )}
 
+      {saveError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {saveError}
+        </div>
+      )}
+
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
         <input type="text" placeholder="Search plate, driver, or customer..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
@@ -232,13 +262,13 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                 <th className="px-4 py-3 text-left">Customer</th>
                 <th className="px-4 py-3 text-right">Dimensions (cm)</th>
                 <th className="px-4 py-3 text-right">Capacity (m³)</th>
-                {!readOnly && <th className="px-4 py-3 text-center w-20">Actions</th>}
+                {(canEdit || canDelete) && <th className="px-4 py-3 text-center w-20">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={readOnly ? 6 : 7} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={(canEdit || canDelete) ? 7 : 6} className="px-4 py-12 text-center text-slate-400">
                     <Truck size={28} className="mx-auto mb-2 text-slate-300" />
                     No trucks found
                   </td>
@@ -299,15 +329,19 @@ export default function TruckList({ readOnly = false }: { readOnly?: boolean }) 
                         : '—'}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">{t.capacity_m3 > 0 ? `${formatVolume(t.capacity_m3)} m³` : '—'}</td>
-                    {!readOnly && (
+                    {(canEdit || canDelete) && (
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => startEdit(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
-                            <Pencil size={14} />
-                          </button>
-                          <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
-                            {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                          </button>
+                          {canEdit && (
+                            <button onClick={() => startEdit(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                              {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </button>
+                          )}
                         </div>
                       </td>
                     )}

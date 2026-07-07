@@ -12,7 +12,13 @@ function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function PricingList({ readOnly = false }: { readOnly?: boolean }) {
+interface PricingListProps {
+  canAdd?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+}
+
+export default function PricingList({ canAdd = false, canEdit = false, canDelete = false }: PricingListProps) {
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -25,6 +31,7 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
   const [editErrors, setEditErrors] = useState<{ material_type?: string; unit_price?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const canManage = canAdd || canEdit || canDelete;
 
   useEffect(() => { fetchPricing(); }, []);
   useEffect(() => { setPage(1); }, [pricingList.length]);
@@ -114,7 +121,7 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
           <h1 className="text-2xl font-bold text-slate-800">Pricing</h1>
           <p className="text-slate-500 text-sm mt-0.5">Material price list per m³</p>
         </div>
-        {!readOnly && (
+        {canAdd && (
           <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200">
             <PlusCircle size={16} />
             Add Pricing
@@ -122,9 +129,9 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
         )}
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can review pricing, but only managers can maintain price entries." />}
+      {!canManage && <ReadOnlyNotice message="This user group can review pricing only." />}
 
-      {showForm && !readOnly && (
+      {showForm && canAdd && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-slate-800">New Price Entry</h2>
@@ -206,14 +213,18 @@ export default function PricingList({ readOnly = false }: { readOnly?: boolean }
                       <span className="text-xs text-slate-400 mr-1">
                         {new Date(p.effective_date + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
                       </span>
-                      {!readOnly && (
+                      {(canEdit || canDelete) && (
                         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => startEdit(p)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
-                            <Pencil size={14} />
-                          </button>
-                          <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
-                            {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                          </button>
+                          {canEdit && (
+                            <button onClick={() => startEdit(p)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit">
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                              {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>

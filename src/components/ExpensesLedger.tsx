@@ -9,7 +9,7 @@ const PAGE_SIZE = 10;
 
 interface ExpensesLedgerProps {
   refreshKey: number;
-  readOnly?: boolean;
+  canDelete?: boolean;
 }
 
 function fmt(v: number) {
@@ -26,7 +26,7 @@ const categoryColors: Record<string, { bg: string; text: string; border: string 
   Miscellaneous: { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' },
 };
 
-export default function ExpensesLedger({ refreshKey, readOnly = false }: ExpensesLedgerProps) {
+export default function ExpensesLedger({ refreshKey, canDelete = false }: ExpensesLedgerProps) {
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -117,7 +117,7 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
                   <th className="px-4 py-3 text-left">Description</th>
                   <th className="px-4 py-3 text-right">Amount</th>
                   <th className="px-4 py-3 text-center">Liters</th>
-                  {!readOnly && <th className="px-4 py-3"></th>}
+                  {canDelete && <th className="px-4 py-3"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -156,7 +156,7 @@ export default function ExpensesLedger({ refreshKey, readOnly = false }: Expense
                           <span className="text-slate-400 text-xs">—</span>
                         )}
                       </td>
-                      {!readOnly && (
+                      {canDelete && (
                         <td className="px-4 py-3 text-center">
                           <button
                             onClick={() => handleDelete(exp.id)}

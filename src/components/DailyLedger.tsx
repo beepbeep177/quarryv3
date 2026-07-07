@@ -22,7 +22,9 @@ interface DailyLedgerProps {
   onAddEntry: () => void;
   onEditEntry: (tx: TransactionWithRelations) => void;
   refreshKey: number;
-  readOnly: boolean;
+  canAdd: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
 const today = new Date().toISOString().split('T')[0];
@@ -35,7 +37,7 @@ function formatVolume(v: number) {
   return v.toFixed(2);
 }
 
-export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readOnly }: DailyLedgerProps) {
+export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAdd, canEdit, canDelete }: DailyLedgerProps) {
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -45,6 +47,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
   const [page, setPage] = useState(1);
   const [attachmentPreview, setAttachmentPreview] = useState<string[] | null>(null);
   const [attachmentPreviewLoading, setAttachmentPreviewLoading] = useState(false);
+  const canManage = canAdd || canEdit || canDelete;
 
   useEffect(() => { fetchTransactions(); }, [refreshKey]);
   useEffect(() => { setPage(1); }, [search, modeFilter, productFilter, refreshKey]);
@@ -120,7 +123,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
             {new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
-        {!readOnly && (
+        {canAdd && (
           <button
             onClick={onAddEntry}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors shadow-sm shadow-emerald-200"
@@ -131,7 +134,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
         )}
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can review daily transactions, but only managers can add, edit, or delete them." />}
+      {!canManage && <ReadOnlyNotice message="This user group can review daily transactions only." />}
 
       <div className="flex gap-3 items-center flex-wrap">
         <div className="relative flex-1 min-w-48">
@@ -198,7 +201,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
           <div className="py-16 text-center">
             <Layers size={32} className="text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm font-medium">No transactions found</p>
-            {!readOnly && (
+            {canAdd && (
               <button onClick={onAddEntry} className="mt-3 text-sm text-emerald-600 font-medium hover:text-emerald-700">
                 Add first entry
               </button>
@@ -224,7 +227,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                     <th className="px-4 py-3 text-center">Status</th>
                     <th className="px-4 py-3 text-left">Notes</th>
                     <th className="px-4 py-3 text-left">Attachments</th>
-                    {!readOnly && <th className="px-4 py-3"></th>}
+                    {(canEdit || canDelete) && <th className="px-4 py-3"></th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -264,22 +267,26 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, readO
                             <span className="text-slate-400">—</span>
                           )}
                         </td>
-                        {!readOnly && (
+                        {(canEdit || canDelete) && (
                           <td className="px-4 py-3 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                              <button
-                                onClick={() => onEditEntry(tx)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                onClick={() => handleDelete(tx.id)}
-                                disabled={deletingId === tx.id}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              {canEdit && (
+                                <button
+                                  onClick={() => onEditEntry(tx)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              )}
+                              {canDelete && (
+                                <button
+                                  onClick={() => handleDelete(tx.id)}
+                                  disabled={deletingId === tx.id}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         )}

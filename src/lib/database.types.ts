@@ -4,6 +4,37 @@ export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
 export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' | 'DONATION' | 'SPLIT';
 export type TransactionStatus = 'PENDING' | 'PAID';
+export type ActivityCode =
+  | 'DASHBOARD_VIEW'
+  | 'DAILY_LEDGER_VIEW'
+  | 'DAILY_LEDGER_ADD'
+  | 'DAILY_LEDGER_EDIT'
+  | 'DAILY_LEDGER_DELETE'
+  | 'DAILY_LEDGER_UPLOAD'
+  | 'CUSTOMERS_VIEW'
+  | 'CUSTOMERS_ADD'
+  | 'CUSTOMERS_EDIT'
+  | 'CUSTOMERS_DELETE'
+  | 'ACCOUNTS_RECEIVABLE_VIEW'
+  | 'ACCOUNTS_RECEIVABLE_EDIT'
+  | 'TRUCKS_VIEW'
+  | 'TRUCKS_ADD'
+  | 'TRUCKS_EDIT'
+  | 'TRUCKS_DELETE'
+  | 'PRICING_VIEW'
+  | 'PRICING_ADD'
+  | 'PRICING_EDIT'
+  | 'PRICING_DELETE'
+  | 'EXPENSES_VIEW'
+  | 'EXPENSES_ADD'
+  | 'EXPENSES_DELETE'
+  | 'REPORTS_VIEW'
+  | 'REPORTS_PRINT'
+  | 'REPORTS_EXPORT'
+  | 'USER_ACCOUNTS_MANAGE'
+  | 'USER_GROUP_ACCESS_VIEW'
+  | 'USER_GROUP_ACCESS_MANAGE'
+  | 'AUDIT_LOG_VIEW';
 
 export type Database = {
   public: {
@@ -61,6 +92,182 @@ export type Database = {
           new_data?: Json | null;
         };
         Relationships: [];
+      };
+      sys_user_group: {
+        Row: {
+          id: string;
+          code: UserRole;
+          name: string;
+          description: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          code: UserRole;
+          name: string;
+          description?: string;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          code?: UserRole;
+          name?: string;
+          description?: string;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      sys_module: {
+        Row: {
+          id: string;
+          code: string;
+          name: string;
+          sort_order: number;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          code: string;
+          name: string;
+          sort_order?: number;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          name?: string;
+          sort_order?: number;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      sys_sub_module: {
+        Row: {
+          id: string;
+          module_id: string;
+          code: string;
+          name: string;
+          nav_section: string | null;
+          sort_order: number;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          module_id: string;
+          code: string;
+          name: string;
+          nav_section?: string | null;
+          sort_order?: number;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          module_id?: string;
+          code?: string;
+          name?: string;
+          nav_section?: string | null;
+          sort_order?: number;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'sys_sub_module_module_id_fkey';
+            columns: ['module_id'];
+            referencedRelation: 'sys_module';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      sys_activity: {
+        Row: {
+          id: string;
+          sub_module_id: string;
+          code: ActivityCode;
+          name: string;
+          action: string;
+          sort_order: number;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          sub_module_id: string;
+          code: ActivityCode;
+          name: string;
+          action: string;
+          sort_order?: number;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          sub_module_id?: string;
+          code?: ActivityCode;
+          name?: string;
+          action?: string;
+          sort_order?: number;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'sys_activity_sub_module_id_fkey';
+            columns: ['sub_module_id'];
+            referencedRelation: 'sys_sub_module';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      sys_map_user_group_activity: {
+        Row: {
+          id: string;
+          user_group_id: string;
+          activity_id: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_group_id: string;
+          activity_id: string;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          user_group_id?: string;
+          activity_id?: string;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'sys_map_user_group_activity_activity_id_fkey';
+            columns: ['activity_id'];
+            referencedRelation: 'sys_activity';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'sys_map_user_group_activity_user_group_id_fkey';
+            columns: ['user_group_id'];
+            referencedRelation: 'sys_user_group';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       customers: {
         Row: {
@@ -280,7 +487,37 @@ export type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      ensure_user_profile: {
+        Args: Record<string, never>;
+        Returns: Database['public']['Tables']['app_users']['Row'];
+      };
+      get_my_activity_codes: {
+        Args: Record<string, never>;
+        Returns: string[];
+      };
+      has_activity: {
+        Args: {
+          activity_code: string;
+          check_user_id?: string;
+        };
+        Returns: boolean;
+      };
+      replace_user_group_activities: {
+        Args: {
+          target_user_group_id: string;
+          activity_codes: string[];
+        };
+        Returns: void;
+      };
+      save_user_group_activities: {
+        Args: {
+          target_user_group_id: string;
+          activity_codes: string[];
+        };
+        Returns: void;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
@@ -288,6 +525,11 @@ export type Database = {
 
 export type AppUser = Database['public']['Tables']['app_users']['Row'];
 export type AuditLogRow = Database['public']['Tables']['audit_logs']['Row'];
+export type UserGroup = Database['public']['Tables']['sys_user_group']['Row'];
+export type AccessModule = Database['public']['Tables']['sys_module']['Row'];
+export type AccessSubModule = Database['public']['Tables']['sys_sub_module']['Row'];
+export type AccessActivity = Database['public']['Tables']['sys_activity']['Row'];
+export type UserGroupActivity = Database['public']['Tables']['sys_map_user_group_activity']['Row'];
 export type Customer = Database['public']['Tables']['customers']['Row'];
 export type Truck = Database['public']['Tables']['trucks']['Row'];
 export type Pricing = Database['public']['Tables']['pricing']['Row'];

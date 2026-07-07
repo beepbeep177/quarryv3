@@ -8,6 +8,7 @@ interface AddEntryModalProps {
   onClose: () => void;
   onSuccess: () => void;
   transaction?: TransactionWithRelations;
+  canUploadAttachments?: boolean;
 }
 
 interface ProductRow {
@@ -122,7 +123,7 @@ function txToForm(tx: TransactionWithRelations): FormData {
   };
 }
 
-export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEntryModalProps) {
+export default function AddEntryModal({ onClose, onSuccess, transaction, canUploadAttachments = true }: AddEntryModalProps) {
   const isEditing = !!transaction;
   const [form, setForm] = useState<FormData>(isEditing ? txToForm(transaction!) : EMPTY_FORM);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -323,6 +324,10 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const totalAttachmentCount = existingAttachmentUrls.length + newAttachmentFiles.length;
 
   const handleAttachmentSelection = (files: FileList | null) => {
+    if (!canUploadAttachments) {
+      setSaveError('This user group cannot upload attachments.');
+      return;
+    }
     if (!files) return;
     const selectedImages = Array.from(files).filter(file => file.type.startsWith('image/'));
     const remainingSlots = Math.max(0, MAX_ATTACHMENTS - totalAttachmentCount);
@@ -407,6 +412,10 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
   const hasZeroUnitPrice = !isDonationMode && form.products.some(product => product.unit_price !== '' && n(product.unit_price) === 0);
 
   async function uploadNewAttachments() {
+    if (!canUploadAttachments && newAttachmentFiles.length > 0) {
+      throw new Error('This user group cannot upload attachments.');
+    }
+
     const uploadedPaths: string[] = [];
 
     try {
@@ -443,7 +452,9 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
 
     try {
       const uploadedPaths = await uploadNewAttachments();
-      const attachmentUrls = [...existingAttachmentUrls, ...uploadedPaths];
+      const attachmentUrls = canUploadAttachments
+        ? [...existingAttachmentUrls, ...uploadedPaths]
+        : (transaction?.attachment_urls ?? []);
 
       if (isEditing) {
         const p = form.products[0];
@@ -724,25 +735,28 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
           </div>
 
           {/* Attachments */}
+          {(canUploadAttachments || existingAttachmentUrls.length > 0) && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                 Attachments ({totalAttachmentCount}/{MAX_ATTACHMENTS})
               </p>
-              <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer hover:bg-slate-50">
-                <ImagePlus size={13} />
-                Add Image
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={e => {
-                    handleAttachmentSelection(e.target.files);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
+              {canUploadAttachments && (
+                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer hover:bg-slate-50">
+                  <ImagePlus size={13} />
+                  Add Image
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={e => {
+                      handleAttachmentSelection(e.target.files);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              )}
             </div>
 
             {existingAttachmentUrls.length > 0 && (
@@ -752,13 +766,15 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
                     <a href={url} target="_blank" rel="noopener noreferrer">
                       <img src={url} alt="Attachment" className="w-full h-24 object-cover" />
                     </a>
-                    <button
-                      type="button"
-                      onClick={() => removeExistingAttachment(url)}
-                      className="absolute top-1 right-1 w-6 h-6 rounded-full bg-slate-900/70 text-white flex items-center justify-center"
-                    >
-                      <X size={12} />
-                    </button>
+                    {canUploadAttachments && (
+                      <button
+                        type="button"
+                        onClick={() => removeExistingAttachment(url)}
+                        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-slate-900/70 text-white flex items-center justify-center"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -781,6 +797,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction }: AddEn
               </div>
             )}
           </div>
+          )}
 
           {/* Notes */}
           <Field label="Notes (optional)">

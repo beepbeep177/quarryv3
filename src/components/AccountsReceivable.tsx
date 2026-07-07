@@ -16,7 +16,7 @@ function formatVolume(v: number) {
   return v.toFixed(2);
 }
 
-export default function AccountsReceivable({ readOnly = false }: { readOnly?: boolean }) {
+export default function AccountsReceivable({ canEdit = false }: { canEdit?: boolean }) {
   const [records, setRecords] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -67,7 +67,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
         </button>
       </div>
 
-      {readOnly && <ReadOnlyNotice message="Operators can review outstanding balances, but only managers can mark receivables as paid." />}
+      {!canEdit && <ReadOnlyNotice message="This user group can review outstanding balances only." />}
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
@@ -107,7 +107,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
                   <th className="px-4 py-3 text-right">Volume (m³)</th>
                   <th className="px-4 py-3 text-right">Total Amount</th>
                   <th className="px-4 py-3 text-center">Mode</th>
-                  {!readOnly && <th className="px-4 py-3 text-center">Action</th>}
+                  {canEdit && <th className="px-4 py-3 text-center">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -125,7 +125,7 @@ export default function AccountsReceivable({ readOnly = false }: { readOnly?: bo
                         ? <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>
                         : <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>}
                     </td>
-                    {!readOnly && (
+                    {canEdit && (
                       <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => markPaid(r.id)}

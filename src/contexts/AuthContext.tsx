@@ -1,15 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import type { AppUser, UserRole } from '../lib/database.types';
+import type { ActivityCode, AppUser, UserRole } from '../lib/database.types';
 
 interface AuthContextType {
   session: Session | null;
   user: Session['user'] | null;
   profile: AppUser | null;
   role: UserRole | null;
+  permissions: Set<ActivityCode>;
   isManager: boolean;
   loading: boolean;
+  can: (activityCode: ActivityCode) => boolean;
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -21,11 +23,24 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<AppUser | null>(null);
+  const [permissions, setPermissions] = useState<Set<ActivityCode>>(new Set());
   const [loading, setLoading] = useState(true);
+
+  const loadPermissions = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_my_activity_codes');
+
+    if (error) {
+      setPermissions(new Set());
+      return;
+    }
+
+    setPermissions(new Set((data ?? []) as ActivityCode[]));
+  }, []);
 
   const loadProfile = useCallback(async (userId: string | undefined) => {
     if (!userId) {
       setProfile(null);
+      setPermissions(new Set());
       return;
     }
 
@@ -36,7 +51,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .maybeSingle();
 
     if (data) {
-      setProfile(data as AppUser);
+      const appUser = data as AppUser;
+      setProfile(appUser);
+      await loadPermissions();
       return;
     }
 
@@ -44,12 +61,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Auto-register via SECURITY DEFINER RPC (first caller becomes manager).
     const { data: created, error: rpcError } = await supabase.rpc('ensure_user_profile');
     if (!rpcError) {
-      setProfile((created ?? null) as AppUser | null);
+      const appUser = (created ?? null) as AppUser | null;
+      setProfile(appUser);
+      await loadPermissions();
     } else {
       console.error('ensure_user_profile RPC failed:', rpcError.message);
       setProfile(null);
+      setPermissions(new Set());
     }
-  }, []);
+  }, [loadPermissions]);
 
   useEffect(() => {
     let active = true;
@@ -81,6 +101,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [loadProfile]);
 
+  useEffect(() => {
+    if (!session?.user.id) return;
+
+    const refreshCurrentUser = () => {
+      if (document.visibilityState === 'visible') {
+        loadProfile(session.user.id);
+      }
+    };
+
+    window.addEventListener('focus', refreshCurrentUser);
+    document.addEventListener('visibilitychange', refreshCurrentUser);
+
+    return () => {
+      window.removeEventListener('focus', refreshCurrentUser);
+      document.removeEventListener('visibilitychange', refreshCurrentUser);
+    };
+  }, [loadProfile, session?.user.id]);
+
   const signUp = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
@@ -95,24 +133,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
     setProfile(null);
+    setPermissions(new Set());
   }, []);
 
   const refreshProfile = useCallback(async () => {
     await loadProfile(session?.user.id);
   }, [loadProfile, session?.user.id]);
 
+  const can = useCallback((activityCode: ActivityCode) => permissions.has(activityCode), [permissions]);
+
   const value = useMemo<AuthContextType>(() => ({
     session,
     user: session?.user ?? null,
     profile,
     role: profile?.role ?? null,
-    isManager: profile?.role === 'manager',
+    permissions,
+    isManager: permissions.has('USER_GROUP_ACCESS_MANAGE'),
     loading,
+    can,
     signUp,
     signIn,
     signOut,
     refreshProfile,
-  }), [loading, profile, refreshProfile, session, signIn, signOut, signUp]);
+  }), [can, loading, permissions, profile, refreshProfile, session, signIn, signOut, signUp]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

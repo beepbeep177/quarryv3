@@ -16,12 +16,13 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import type { ActivityCode } from '../lib/database.types';
 import type { NavSection } from '../types';
 
 interface SidebarProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection) => void;
-  isManager: boolean;
+  can: (activityCode: ActivityCode) => boolean;
 }
 
 interface MenuItem {
@@ -31,11 +32,11 @@ interface MenuItem {
   children?: { id: NavSection; label: string; icon: React.ReactNode }[];
 }
 
-export default function Sidebar({ activeSection, onNavigate, isManager }: SidebarProps) {
+export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps) {
   const menuItems = useMemo<MenuItem[]>(() => {
     const items: MenuItem[] = [];
 
-    if (isManager) {
+    if (can('DASHBOARD_VIEW')) {
       items.push({
         id: 'dashboard',
         label: 'Dashboard',
@@ -43,48 +44,72 @@ export default function Sidebar({ activeSection, onNavigate, isManager }: Sideba
       });
     }
 
-    items.push(
+    if (can('DAILY_LEDGER_VIEW')) {
+      items.push(
       {
         id: 'daily-view',
         label: 'Daily Transactions',
         icon: <ClipboardList size={18} />,
         children: [
-          ...(isManager ? [{ id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> }] : []),
+          ...(can('DAILY_LEDGER_ADD') ? [{ id: 'daily-add' as const, label: 'Add Entry', icon: <PlusCircle size={15} /> }] : []),
           { id: 'daily-view' as const, label: 'View Today', icon: <Eye size={15} /> },
         ],
       },
+      );
+    }
+
+    const customerChildren = [
+      ...(can('CUSTOMERS_VIEW') ? [{ id: 'customers-list' as const, label: 'Masterlist', icon: <BookUser size={15} /> }] : []),
+      ...(can('ACCOUNTS_RECEIVABLE_VIEW') ? [{ id: 'customers-ar' as const, label: 'Accounts Receivable', icon: <ReceiptText size={15} /> }] : []),
+    ];
+    if (customerChildren.length > 0) {
+      items.push(
       {
         id: 'customers-list',
         label: 'Customers',
         icon: <Users size={18} />,
-        children: [
-          { id: 'customers-list', label: 'Masterlist', icon: <BookUser size={15} /> },
-          { id: 'customers-ar', label: 'Accounts Receivable', icon: <ReceiptText size={15} /> },
-        ],
+        children: customerChildren,
       },
+      );
+    }
+
+    const logisticsChildren = [
+      ...(can('TRUCKS_VIEW') ? [{ id: 'logistics-trucks' as const, label: 'Truck List', icon: <ListTodo size={15} /> }] : []),
+      ...(can('PRICING_VIEW') ? [{ id: 'logistics-pricing' as const, label: 'Pricing', icon: <DollarSign size={15} /> }] : []),
+    ];
+    if (logisticsChildren.length > 0) {
+      items.push(
       {
         id: 'logistics-trucks',
         label: 'Logistics',
         icon: <Truck size={18} />,
-        children: [
-          { id: 'logistics-trucks', label: 'Truck List', icon: <ListTodo size={15} /> },
-          ...(isManager ? [{ id: 'logistics-pricing' as const, label: 'Pricing', icon: <DollarSign size={15} /> }] : []),
-        ],
+        children: logisticsChildren,
       },
+      );
+    }
+
+    if (can('EXPENSES_VIEW')) {
+      items.push(
       {
         id: 'expenses',
         label: 'Expenses',
         icon: <Banknote size={18} />,
       },
-    );
+      );
+    }
 
-    if (isManager) {
+    if (can('REPORTS_VIEW')) {
       items.push(
         {
           id: 'reports',
           label: 'Reports',
           icon: <FileBarChart2 size={18} />,
         },
+      );
+    }
+
+    if (can('USER_GROUP_ACCESS_VIEW') || can('USER_GROUP_ACCESS_MANAGE') || can('USER_ACCOUNTS_MANAGE') || can('AUDIT_LOG_VIEW')) {
+      items.push(
         {
           id: 'access-control',
           label: 'Access Control',
@@ -94,7 +119,7 @@ export default function Sidebar({ activeSection, onNavigate, isManager }: Sideba
     }
 
     return items;
-  }, [isManager]);
+  }, [can]);
 
   const getDefaultOpen = () => {
     const map: Record<string, boolean> = {

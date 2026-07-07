@@ -53,12 +53,13 @@ export default function App() {
 
   function handleNavigate(section: NavSection) {
     // Operators cannot access manager-only sections
-    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control')) {
+    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control' || section === 'logistics-pricing')) {
       return;
     }
 
     if (section === 'daily-add') {
-      setShowAddModal(true);
+      // Only managers can add daily transactions
+      if (isManager) setShowAddModal(true);
       setActiveSection('daily-view');
       return;
     }
@@ -126,17 +127,17 @@ export default function App() {
             )}
             {activeSection === 'daily-view' && (
               <DailyLedger
-                onAddEntry={() => canManageRecords && setShowAddModal(true)}
+                onAddEntry={() => isManager && setShowAddModal(true)}
                 onEditEntry={handleEditTransaction}
                 refreshKey={refreshKey}
-                readOnly={!canManageRecords}
+                readOnly={!isManager}
               />
             )}
             {activeSection === 'customers-list' && <CustomersList readOnly={!canManageRecords} />}
-            {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!canManageRecords} />}
+            {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!isManager} />}
             {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
-            {activeSection === 'logistics-pricing' && <PricingList readOnly={!isManager} />}
-            {activeSection === 'expenses' && <Expenses readOnly={!canManageRecords} />}
+            {activeSection === 'logistics-pricing' && isManager && <PricingList readOnly={!isManager} />}
+            {activeSection === 'expenses' && <Expenses readOnly={!isManager} />}
             {activeSection === 'reports' && <Reports initialTab={reportTab} />}
             {activeSection === 'access-control' && isManager && <AccessControl />}
           </div>

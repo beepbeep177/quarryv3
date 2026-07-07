@@ -136,7 +136,7 @@ export default function App() {
             {activeSection === 'customers-list' && <CustomersList readOnly={!canManageRecords} />}
             {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!isManager} />}
             {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
-            {activeSection === 'logistics-pricing' && isManager && <PricingList />}
+            {activeSection === 'logistics-pricing' && isManager && <PricingList readOnly={!isManager} />}
             {activeSection === 'expenses' && <Expenses readOnly={!isManager} />}
             {activeSection === 'reports' && <Reports initialTab={reportTab} />}
             {activeSection === 'access-control' && isManager && <AccessControl />}

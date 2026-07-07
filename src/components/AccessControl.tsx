@@ -323,7 +323,7 @@ export default function AccessControl() {
             <ShieldCheck size={18} className="text-emerald-600" />
             <div>
               <h2 className="font-semibold text-slate-800">User Roles</h2>
-              <p className="text-xs text-slate-500">Managers can edit records. Operators stay read-only.</p>
+              <p className="text-xs text-slate-500">Operators can edit Customers and Trucks only; all other sections are restricted or view-only.</p>
             </div>
           </div>
 

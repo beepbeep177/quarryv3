@@ -53,7 +53,7 @@ export default function App() {
 
   function handleNavigate(section: NavSection) {
     // Operators cannot access manager-only sections
-    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control')) {
+    if (!isManager && (section === 'dashboard' || section === 'reports' || section === 'access-control' || section === 'logistics-pricing')) {
       return;
     }
 
@@ -136,7 +136,7 @@ export default function App() {
             {activeSection === 'customers-list' && <CustomersList readOnly={!canManageRecords} />}
             {activeSection === 'customers-ar' && <AccountsReceivable readOnly={!isManager} />}
             {activeSection === 'logistics-trucks' && <TruckList readOnly={!canManageRecords} />}
-            {activeSection === 'logistics-pricing' && <PricingList readOnly={!isManager} />}
+            {activeSection === 'logistics-pricing' && isManager && <PricingList />}
             {activeSection === 'expenses' && <Expenses readOnly={!isManager} />}
             {activeSection === 'reports' && <Reports initialTab={reportTab} />}
             {activeSection === 'access-control' && isManager && <AccessControl />}

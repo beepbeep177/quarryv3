@@ -68,7 +68,7 @@ export default function Sidebar({ activeSection, onNavigate, isManager }: Sideba
         icon: <Truck size={18} />,
         children: [
           { id: 'logistics-trucks', label: 'Truck List', icon: <ListTodo size={15} /> },
-          { id: 'logistics-pricing', label: 'Pricing', icon: <DollarSign size={15} /> },
+          ...(isManager ? [{ id: 'logistics-pricing' as const, label: 'Pricing', icon: <DollarSign size={15} /> }] : []),
         ],
       },
       {

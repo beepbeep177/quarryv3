@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown } from 'lucide-react';
+import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown, Download, FileText } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { TransactionWithRelations } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
@@ -14,6 +14,36 @@ function fmt(v: number) {
 
 function formatVolume(v: number) {
   return v.toFixed(2);
+}
+
+function fmtDate(dateStr: string) {
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function htmlEscape(value: string | number) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function csvEscape(value: string | number) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export default function AccountsReceivable({ canEdit = false }: { canEdit?: boolean }) {
@@ -55,6 +85,119 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
   const currentPage = Math.min(page, totalPages);
   const pagedRecords = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
+  const uniqueCustomerNames = useMemo(() => {
+    const names = new Set(filtered.map(r => r.customers?.name ?? '').filter(Boolean));
+    return [...names];
+  }, [filtered]);
+
+  function exportCsv() {
+    if (filtered.length === 0) { alert('No records to export.'); return; }
+    const headers = ['Date', 'DR Number', 'Customer', 'Volume (m3)', 'Amount', 'Mode', 'Payment Status'];
+    const rows = filtered.map(r => [
+      fmtDate(r.transaction_date),
+      r.dr_number,
+      r.customers?.name ?? '',
+      r.volume_m3 ?? 0,
+      r.total_amount ?? 0,
+      r.payment_mode,
+      r.status,
+    ]);
+    const totalRow = ['TOTAL', '', '', filtered.reduce((s, r) => s + (r.volume_m3 ?? 0), 0), totalPending, '', ''];
+    const filterLine = search ? `Filter: ${search}` : 'All pending P.O and OFFSET transactions';
+    const lines = [
+      [`Accounts Receivable Report`],
+      [filterLine],
+      [`Generated: ${new Date().toLocaleString('en-PH')}`],
+      [],
+      headers,
+      ...rows,
+      totalRow,
+    ];
+    const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
+    const slug = search ? search.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : 'all';
+    downloadTextFile(`accounts-receivable-${slug}-${new Date().toISOString().split('T')[0]}.csv`, csv, 'text/csv;charset=utf-8');
+  }
+
+  function exportPdf() {
+    if (filtered.length === 0) { alert('No records to export.'); return; }
+    const generated = new Date().toLocaleString('en-PH');
+    const isSingleCustomer = uniqueCustomerNames.length === 1;
+    const reportTitle = isSingleCustomer
+      ? `Statement of Account — ${uniqueCustomerNames[0]}`
+      : 'Accounts Receivable Report';
+    const filterNote = search ? `Filter: ${htmlEscape(search)}` : 'All pending P.O and OFFSET transactions';
+    const totalVolume = filtered.reduce((s, r) => s + (r.volume_m3 ?? 0), 0);
+
+    const rowsHtml = filtered.map(r => `
+      <tr>
+        <td>${htmlEscape(fmtDate(r.transaction_date))}</td>
+        <td>${htmlEscape(r.dr_number)}</td>
+        <td>${htmlEscape(r.customers?.name ?? '—')}</td>
+        <td class="num">${htmlEscape(formatVolume(r.volume_m3 ?? 0))}</td>
+        <td>${htmlEscape(r.payment_mode)}</td>
+        <td class="num">₱${htmlEscape(fmt(r.total_amount ?? 0))}</td>
+      </tr>`).join('');
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups to export the report PDF.');
+      return;
+    }
+    printWindow.document.write(`<!doctype html>
+      <html>
+        <head>
+          <title>${htmlEscape(reportTitle)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #0f172a; margin: 32px; }
+            h1 { font-size: 20px; margin: 0 0 4px; }
+            .subtitle { color: #92400e; font-size: 12px; margin: 0 0 16px; }
+            .meta { color: #475569; font-size: 11px; line-height: 1.55; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th { text-align: left; background: #f1f5f9; color: #475569; text-transform: uppercase; letter-spacing: .03em; }
+            th, td { border: 1px solid #e2e8f0; padding: 7px 8px; }
+            td.num, th.num { text-align: right; }
+            tfoot td { background: #0f172a; color: white; font-weight: 700; }
+            tfoot td.num { text-align: right; }
+            @media print { body { margin: 18mm; } }
+          </style>
+        </head>
+        <body>
+          <h1>${htmlEscape(reportTitle)}</h1>
+          <p class="subtitle">Pending P.O and OFFSET Transactions</p>
+          <div class="meta">
+            <div>${filterNote}</div>
+            <div>Generated: ${htmlEscape(generated)}</div>
+            <div>${filtered.length} pending transaction${filtered.length !== 1 ? 's' : ''} &nbsp;|&nbsp; Total Outstanding: ₱${htmlEscape(fmt(totalPending))}</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>DR #</th>
+                <th>Customer</th>
+                <th class="num">Volume (m³)</th>
+                <th class="num">Mode</th>
+                <th class="num">Amount Due</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml || `<tr><td colspan="6">No records found.</td></tr>`}</tbody>
+            <tfoot>
+              <tr>
+                <td colspan="3">Total Outstanding</td>
+                <td class="num">${htmlEscape(formatVolume(totalVolume))} m³</td>
+                <td></td>
+                <td class="num">₱${htmlEscape(fmt(totalPending))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+      </html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }
+
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -80,9 +223,19 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
         </div>
       </div>
 
-      <div className="relative max-w-sm">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input type="text" placeholder="Search customer or DR#..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative max-w-sm flex-1 min-w-48">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input type="text" placeholder="Search customer or DR#..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
+        </div>
+        <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+          <Download size={15} />
+          CSV
+        </button>
+        <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+          <FileText size={15} />
+          PDF
+        </button>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

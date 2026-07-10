@@ -134,7 +134,7 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
         <td>${htmlEscape(r.dr_number)}</td>
         <td>${htmlEscape(r.customers?.name ?? '—')}</td>
         <td class="num">${htmlEscape(formatVolume(r.volume_m3 ?? 0))}</td>
-        <td class="num">${htmlEscape(r.payment_mode)}</td>
+        <td>${htmlEscape(r.payment_mode)}</td>
         <td class="num">₱${htmlEscape(fmt(r.total_amount ?? 0))}</td>
       </tr>`).join('');
 

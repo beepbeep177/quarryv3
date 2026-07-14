@@ -13,6 +13,7 @@ import {
   Download,
   FileText,
   Package,
+  Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
@@ -328,7 +329,14 @@ function PieChart({ data }: { data: { label: string; value: number }[] }) {
   );
 }
 
-export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportTab }) {
+interface ReportsProps {
+  initialTab?: ReportTab;
+  refreshKey?: number;
+  canEditTransactions?: boolean;
+  onEditTransaction?: (tx: TransactionWithRelations) => void;
+}
+
+export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditTransactions = false, onEditTransaction }: ReportsProps) {
   const today = useMemo(() => toInputDate(new Date()), []);
   const defaultFrom = useMemo(() => addDays(today, -6), [today]);
   const currentMonth = useMemo(() => toMonthInput(new Date()), []);
@@ -425,7 +433,7 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
 
   useEffect(() => {
     fetchReportData();
-  }, [fetchReportData]);
+  }, [fetchReportData, refreshKey]);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -854,6 +862,13 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
     setSelectedTransaction(null);
   };
 
+  const editSelectedTransaction = () => {
+    if (!selectedTransaction || !canEditTransactions || !onEditTransaction) return;
+    const tx = selectedTransaction;
+    closeModal();
+    onEditTransaction(tx);
+  };
+
   return (
     <div className="space-y-5">
       {/* Transaction Detail Modal */}
@@ -1024,6 +1039,15 @@ export default function Reports({ initialTab = 'sales' }: { initialTab?: ReportT
 
             {/* Footer */}
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+              {canEditTransactions && onEditTransaction && (
+                <button
+                  onClick={editSelectedTransaction}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <Pencil size={15} />
+                  Edit Transaction
+                </button>
+              )}
               <button
                 onClick={closeModal}
                 className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"

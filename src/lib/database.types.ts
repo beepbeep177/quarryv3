@@ -27,7 +27,13 @@ export type ActivityCode =
   | 'PRICING_DELETE'
   | 'EXPENSES_VIEW'
   | 'EXPENSES_ADD'
+  | 'EXPENSES_EDIT'
   | 'EXPENSES_DELETE'
+  | 'FUEL_VIEW'
+  | 'FUEL_PURCHASE_ADD'
+  | 'FUEL_ISSUANCE_ADD'
+  | 'FUEL_ADJUST'
+  | 'FUEL_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -299,6 +305,7 @@ export type Database = {
           length_cm: number;
           width_cm: number;
           height_cm: number;
+          is_hauler: boolean;
           created_at: string;
         };
         Insert: {
@@ -309,6 +316,7 @@ export type Database = {
           length_cm?: number;
           width_cm?: number;
           height_cm?: number;
+          is_hauler?: boolean;
         };
         Update: {
           plate_number?: string;
@@ -318,6 +326,7 @@ export type Database = {
           length_cm?: number;
           width_cm?: number;
           height_cm?: number;
+          is_hauler?: boolean;
         };
         Relationships: [
           {
@@ -485,6 +494,250 @@ export type Database = {
           },
         ];
       };
+      fuel_branches: {
+        Row: {
+          id: string;
+          name: string;
+          company_name: string;
+          is_default: boolean;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          company_name?: string;
+          is_default?: boolean;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          company_name?: string;
+          is_default?: boolean;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      fuel_inventory_state: {
+        Row: {
+          id: string;
+          branch_id: string;
+          current_liters: number;
+          weighted_average_cost: number;
+          inventory_value: number;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          branch_id: string;
+          current_liters?: number;
+          weighted_average_cost?: number;
+          inventory_value?: number;
+          updated_at?: string;
+        };
+        Update: {
+          branch_id?: string;
+          current_liters?: number;
+          weighted_average_cost?: number;
+          inventory_value?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'fuel_inventory_state_branch_id_fkey';
+            columns: ['branch_id'];
+            referencedRelation: 'fuel_branches';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      fuel_purchases: {
+        Row: {
+          id: string;
+          branch_id: string;
+          purchase_date: string;
+          supplier: string;
+          reference_no: string;
+          liters: number;
+          unit_cost: number;
+          total_amount: number;
+          remarks: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          branch_id: string;
+          purchase_date?: string;
+          supplier: string;
+          reference_no?: string;
+          liters: number;
+          unit_cost: number;
+          total_amount: number;
+          remarks?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          branch_id?: string;
+          purchase_date?: string;
+          supplier?: string;
+          reference_no?: string;
+          liters?: number;
+          unit_cost?: number;
+          total_amount?: number;
+          remarks?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'fuel_purchases_branch_id_fkey';
+            columns: ['branch_id'];
+            referencedRelation: 'fuel_branches';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      fuel_issuances: {
+        Row: {
+          id: string;
+          branch_id: string;
+          issuance_date: string;
+          category: string;
+          issued_to: string;
+          truck_id: string | null;
+          reference_no: string;
+          liters: number;
+          unit_cost_snapshot: number;
+          total_value: number;
+          remarks: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          branch_id: string;
+          issuance_date?: string;
+          category: string;
+          issued_to: string;
+          truck_id?: string | null;
+          reference_no?: string;
+          liters: number;
+          unit_cost_snapshot: number;
+          total_value: number;
+          remarks?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          branch_id?: string;
+          issuance_date?: string;
+          category?: string;
+          issued_to?: string;
+          truck_id?: string | null;
+          reference_no?: string;
+          liters?: number;
+          unit_cost_snapshot?: number;
+          total_value?: number;
+          remarks?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'fuel_issuances_branch_id_fkey';
+            columns: ['branch_id'];
+            referencedRelation: 'fuel_branches';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'fuel_issuances_truck_id_fkey';
+            columns: ['truck_id'];
+            referencedRelation: 'trucks';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      fuel_inventory_ledger: {
+        Row: {
+          id: string;
+          branch_id: string;
+          movement_date: string;
+          movement_type: 'OPENING_BALANCE' | 'PURCHASE' | 'ISSUANCE' | 'ADJUSTMENT' | 'REVERSAL';
+          source_table: string | null;
+          source_id: string | null;
+          reference_no: string;
+          description: string;
+          liters_delta: number;
+          unit_cost: number;
+          value_delta: number;
+          balance_liters_after: number;
+          weighted_average_cost_after: number;
+          inventory_value_after: number;
+          reversal_of_ledger_id: string | null;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          branch_id: string;
+          movement_date?: string;
+          movement_type: 'OPENING_BALANCE' | 'PURCHASE' | 'ISSUANCE' | 'ADJUSTMENT' | 'REVERSAL';
+          source_table?: string | null;
+          source_id?: string | null;
+          reference_no?: string;
+          description?: string;
+          liters_delta: number;
+          unit_cost?: number;
+          value_delta?: number;
+          balance_liters_after: number;
+          weighted_average_cost_after: number;
+          inventory_value_after: number;
+          reversal_of_ledger_id?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          branch_id?: string;
+          movement_date?: string;
+          movement_type?: 'OPENING_BALANCE' | 'PURCHASE' | 'ISSUANCE' | 'ADJUSTMENT' | 'REVERSAL';
+          source_table?: string | null;
+          source_id?: string | null;
+          reference_no?: string;
+          description?: string;
+          liters_delta?: number;
+          unit_cost?: number;
+          value_delta?: number;
+          balance_liters_after?: number;
+          weighted_average_cost_after?: number;
+          inventory_value_after?: number;
+          reversal_of_ledger_id?: string | null;
+          created_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'fuel_inventory_ledger_branch_id_fkey';
+            columns: ['branch_id'];
+            referencedRelation: 'fuel_branches';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'fuel_inventory_ledger_reversal_of_ledger_id_fkey';
+            columns: ['reversal_of_ledger_id'];
+            referencedRelation: 'fuel_inventory_ledger';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -517,6 +770,50 @@ export type Database = {
         };
         Returns: void;
       };
+      create_fuel_purchase: {
+        Args: {
+          p_branch_id: string;
+          p_purchase_date: string;
+          p_supplier: string;
+          p_reference_no: string;
+          p_liters: number;
+          p_unit_cost: number;
+          p_remarks?: string;
+        };
+        Returns: Database['public']['Tables']['fuel_purchases']['Row'];
+      };
+      create_fuel_issuance: {
+        Args: {
+          p_branch_id: string;
+          p_issuance_date: string;
+          p_category: string;
+          p_issued_to: string;
+          p_truck_id: string | null;
+          p_reference_no: string;
+          p_liters: number;
+          p_remarks?: string;
+        };
+        Returns: Database['public']['Tables']['fuel_issuances']['Row'];
+      };
+      create_fuel_adjustment: {
+        Args: {
+          p_branch_id: string;
+          p_movement_date: string;
+          p_liters_delta: number;
+          p_unit_cost: number;
+          p_reference_no?: string;
+          p_description?: string;
+          p_is_opening_balance?: boolean;
+        };
+        Returns: Database['public']['Tables']['fuel_inventory_ledger']['Row'];
+      };
+      reverse_fuel_movement: {
+        Args: {
+          p_ledger_id: string;
+          p_reason?: string;
+        };
+        Returns: Database['public']['Tables']['fuel_inventory_ledger']['Row'];
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
@@ -536,6 +833,11 @@ export type Pricing = Database['public']['Tables']['pricing']['Row'];
 export type Transaction = Database['public']['Tables']['transactions']['Row'];
 export type ExpenseCategory = Database['public']['Tables']['expense_categories']['Row'];
 export type Expense = Database['public']['Tables']['expenses']['Row'];
+export type FuelBranch = Database['public']['Tables']['fuel_branches']['Row'];
+export type FuelInventoryState = Database['public']['Tables']['fuel_inventory_state']['Row'];
+export type FuelPurchase = Database['public']['Tables']['fuel_purchases']['Row'];
+export type FuelIssuance = Database['public']['Tables']['fuel_issuances']['Row'];
+export type FuelInventoryLedger = Database['public']['Tables']['fuel_inventory_ledger']['Row'];
 
 export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
   old_data: Record<string, unknown> | null;

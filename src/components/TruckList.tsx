@@ -28,12 +28,12 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
+  const [form, setForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '', is_hauler: false });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ plate_number?: string }>({});
   const [saveError, setSaveError] = useState('');
   const [editingTruck, setEditingTruck] = useState<TruckWithCustomer | null>(null);
-  const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
+  const [editForm, setEditForm] = useState({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '', is_hauler: false });
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -70,6 +70,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
       width_cm: w,
       height_cm: h,
       capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
+      is_hauler: form.is_hauler,
     }).select('*, customers(*)').maybeSingle();
     setSaving(false);
     if (error) {
@@ -78,7 +79,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
     }
     if (data) {
       setTrucks(prev => [...prev, data as TruckWithCustomer].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
-      setForm({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '' });
+      setForm({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '', is_hauler: false });
       setShowForm(false);
       setErrors({});
     }
@@ -93,6 +94,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
       length_cm: t.length_cm > 0 ? String(t.length_cm) : '',
       width_cm: t.width_cm > 0 ? String(t.width_cm) : '',
       height_cm: t.height_cm > 0 ? String(t.height_cm) : '',
+      is_hauler: t.is_hauler,
     });
     setEditErrors({});
   }
@@ -120,6 +122,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
         width_cm: w,
         height_cm: h,
         capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
+        is_hauler: editForm.is_hauler,
       })
       .eq('id', editingTruck!.id)
       .select('*, customers(*)')
@@ -157,7 +160,8 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
     return !q ||
       t.plate_number.toLowerCase().includes(q) ||
       (t.driver_name ?? '').toLowerCase().includes(q) ||
-      (t.customers?.name ?? '').toLowerCase().includes(q);
+      (t.customers?.name ?? '').toLowerCase().includes(q) ||
+      (t.is_hauler ? 'hauler' : '').includes(q);
   });
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -205,6 +209,15 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                 ))}
               </select>
             </div>
+            <label className="rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2 text-sm text-slate-700 bg-slate-50 self-end">
+              <input
+                type="checkbox"
+                checked={form.is_hauler}
+                onChange={e => setForm(f => ({ ...f, is_hauler: e.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-200"
+              />
+              <span className="font-medium">Hauler truck</span>
+            </label>
             <div>
               <label className="text-xs font-semibold text-slate-500 mb-1 block">Length (cm)</label>
               <input type="number" step="0.01" min="0" value={form.length_cm} onChange={e => setForm(f => ({ ...f, length_cm: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400" placeholder="0.00" />
@@ -259,6 +272,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                 <th className="px-5 py-3 text-left">#</th>
                 <th className="px-4 py-3 text-left">Plate Number</th>
                 <th className="px-4 py-3 text-left">Driver</th>
+                <th className="px-4 py-3 text-left">Type</th>
                 <th className="px-4 py-3 text-left">Customer</th>
                 <th className="px-4 py-3 text-right">Dimensions (cm)</th>
                 <th className="px-4 py-3 text-right">Capacity (m³)</th>
@@ -268,7 +282,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={(canEdit || canDelete) ? 7 : 6} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={(canEdit || canDelete) ? 8 : 7} className="px-4 py-12 text-center text-slate-400">
                     <Truck size={28} className="mx-auto mb-2 text-slate-300" />
                     No trucks found
                   </td>
@@ -277,7 +291,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                 editingTruck?.id === t.id ? (
                   <tr key={t.id} className="bg-blue-50/50">
                     <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + i + 1}</td>
-                    <td className="px-4 py-2" colSpan={6}>
+                    <td className="px-4 py-2" colSpan={7}>
                       <form onSubmit={handleEditSubmit} className="flex items-center gap-2 flex-wrap">
                         <div className="flex-1 min-w-[120px]">
                           <input
@@ -299,6 +313,15 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                             ))}
                           </select>
                         </div>
+                        <label className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={editForm.is_hauler}
+                            onChange={e => setEditForm(f => ({ ...f, is_hauler: e.target.checked }))}
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-200"
+                          />
+                          Hauler
+                        </label>
                         <div className="w-20">
                          <input type="number" step="0.01" min="0" value={editForm.length_cm} onChange={e => setEditForm(f => ({ ...f, length_cm: e.target.value }))} className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" placeholder="L (cm)" />
                         </div>
@@ -322,6 +345,17 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                     <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-4 py-3 font-mono font-bold text-slate-800">{t.plate_number}</td>
                     <td className="px-4 py-3 text-slate-600">{t.driver_name || '—'}</td>
+                    <td className="px-4 py-3">
+                      {t.is_hauler ? (
+                        <span className="inline-flex px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">
+                          Hauler
+                        </span>
+                      ) : (
+                        <span className="inline-flex px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 border border-slate-200 text-xs font-semibold">
+                          Regular
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{t.customers?.name ?? 'Unassigned'}</td>
                     <td className="px-4 py-3 text-right text-xs text-slate-500 tabular-nums whitespace-nowrap">
                       {(t.length_cm > 0 || t.width_cm > 0 || t.height_cm > 0)

@@ -14,6 +14,7 @@ import {
   DollarSign,
   Banknote,
   ShieldCheck,
+  Droplet,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ActivityCode } from '../lib/database.types';
@@ -98,6 +99,16 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
+    if (can('FUEL_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push(
+      {
+        id: 'fuel-management',
+        label: 'Fuel Management',
+        icon: <Droplet size={18} />,
+      },
+      );
+    }
+
     if (can('REPORTS_VIEW')) {
       items.push(
         {
@@ -129,6 +140,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       'customers-ar': true,
       'logistics-trucks': true,
       'logistics-pricing': true,
+      'fuel-management': true,
     };
     return map[activeSection] ? activeSection.startsWith('daily') ? 'daily-view' :
       activeSection.startsWith('customers') ? 'customers-list' : 'logistics-trucks' : null;

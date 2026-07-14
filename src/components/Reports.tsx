@@ -76,6 +76,12 @@ interface ProductSalesSummary {
   revenue: number;
 }
 
+interface FinancialLineItem {
+  label: string;
+  amount: number;
+  share: number;
+}
+
 interface ExportReportData {
   title: string;
   filename: string;
@@ -288,6 +294,21 @@ function tabButtonClass(active: boolean) {
     : 'bg-white text-slate-500 hover:text-slate-700 border border-slate-200';
 }
 
+function compactFinancialLineItems(rows: FinancialLineItem[], otherLabel: string, limit = 6) {
+  if (rows.length <= limit + 1) return rows;
+  const visible = rows.slice(0, limit);
+  const otherAmount = rows.slice(limit).reduce((sum, row) => sum + row.amount, 0);
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  return [
+    ...visible,
+    {
+      label: otherLabel,
+      amount: otherAmount,
+      share: total > 0 ? (otherAmount / total) * 100 : 0,
+    },
+  ];
+}
+
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 
 function PieChart({ data }: { data: { label: string; value: number }[] }) {
@@ -329,6 +350,99 @@ function PieChart({ data }: { data: { label: string; value: number }[] }) {
   );
 }
 
+function FinancialStatementTable({
+  title,
+  rows,
+  total,
+  totalLabel,
+  tone,
+}: {
+  title: string;
+  rows: FinancialLineItem[];
+  total: number;
+  totalLabel: string;
+  tone: 'revenue' | 'expense';
+}) {
+  const isRevenue = tone === 'revenue';
+  const accent = isRevenue
+    ? {
+        border: 'border-t-emerald-200',
+        header: 'bg-emerald-50/50',
+        totalBg: 'bg-emerald-50',
+        totalText: 'text-emerald-700',
+      }
+    : {
+        border: 'border-t-red-200',
+        header: 'bg-red-50/50',
+        totalBg: 'bg-red-50',
+        totalText: 'text-red-700',
+      };
+
+  return (
+    <div className={`bg-white rounded-xl border border-slate-200 ${accent.border} border-t-2 overflow-hidden`}>
+      <div className="px-5 py-4 border-b border-slate-100">
+        <h2 className="font-semibold text-slate-800">{title}</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className={`${accent.header} text-slate-500 text-xs font-semibold uppercase tracking-wide`}>
+              <th className="px-5 py-3 text-left">Description</th>
+              <th className="px-4 py-3 text-right">Amount (₱)</th>
+              <th className="px-4 py-3 text-right">% of {isRevenue ? 'Revenue' : 'Expenses'}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="px-4 py-12 text-center text-slate-400">
+                  No {isRevenue ? 'revenue' : 'expense'} line items found
+                </td>
+              </tr>
+            ) : rows.map(row => (
+              <tr key={row.label} className="hover:bg-slate-50 transition-colors">
+                <td className="px-5 py-3 text-slate-700 font-medium">{row.label}</td>
+                <td className="px-4 py-3 text-right text-slate-800 font-semibold tabular-nums">₱{fmt(row.amount)}</td>
+                <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{total > 0 ? `${row.share.toFixed(2)}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className={accent.totalBg}>
+              <td className={`px-5 py-4 text-xs uppercase font-bold ${accent.totalText}`}>{totalLabel}</td>
+              <td className={`px-4 py-4 text-right font-bold tabular-nums ${accent.totalText}`}>₱{fmt(total)}</td>
+              <td className={`px-4 py-4 text-right font-bold tabular-nums ${accent.totalText}`}>{total > 0 ? '100.00%' : '—'}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function FormulaAmount({
+  label,
+  value,
+  tone,
+  prefix = '',
+}: {
+  label: string;
+  value: number;
+  tone: 'revenue' | 'expense' | 'net';
+  prefix?: string;
+}) {
+  const color = tone === 'revenue' ? 'text-emerald-600' : tone === 'expense' ? 'text-red-500' : 'text-slate-900';
+  return (
+    <div className="text-center md:text-right">
+      <p className="text-xs text-slate-500 uppercase font-semibold">{label}</p>
+      <p className={`text-xl font-bold tabular-nums ${color}`}>
+        {prefix && <span className="text-slate-400 mr-3">{prefix}</span>}
+        ₱{fmt(value)}
+      </p>
+    </div>
+  );
+}
+
 interface ReportsProps {
   initialTab?: ReportTab;
   refreshKey?: number;
@@ -360,7 +474,6 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
   const [customerTransactionsPage, setCustomerTransactionsPage] = useState(1);
   const [expenseSummaryPage, setExpenseSummaryPage] = useState(1);
   const [expenseCategoryPage, setExpenseCategoryPage] = useState(1);
-  const [netPage, setNetPage] = useState(1);
   const [productsPage, setProductsPage] = useState(1);
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
@@ -445,7 +558,6 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     setCustomerTransactionsPage(1);
     setExpenseSummaryPage(1);
     setExpenseCategoryPage(1);
-    setNetPage(1);
     setProductsPage(1);
   }, [activeTab, range.start, range.end, customerId, paymentModeFilter, materialTypeFilter, extraFeeFilter, customerGrouping, expenseGrouping, netGrouping]);
 
@@ -595,6 +707,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     revenue: productSalesList.reduce((sum, product) => sum + product.revenue, 0),
   }), [productSalesList]);
 
+  const totalExpenses = useMemo(() => expenses.reduce((sum, expense) => sum + (expense.amount ?? 0), 0), [expenses]);
+
   const productChartData = useMemo(() => {
     const top = productSalesList.slice(0, 5);
     const others = productSalesList.slice(5);
@@ -603,6 +717,31 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     if (otherQuantity > 0) rows.push({ label: 'Others', value: otherQuantity });
     return rows;
   }, [productSalesList]);
+
+  const revenueLineItems = useMemo(() => {
+    const rows = productSalesList.map(product => ({
+      label: product.materialType,
+      amount: product.revenue,
+      share: grandTotalWithFees > 0 ? (product.revenue / grandTotalWithFees) * 100 : 0,
+    }));
+    if (grandExtraFees > 0) {
+      rows.push({
+        label: 'Other Sales',
+        amount: grandExtraFees,
+        share: grandTotalWithFees > 0 ? (grandExtraFees / grandTotalWithFees) * 100 : 0,
+      });
+    }
+    return compactFinancialLineItems(rows, 'Other Sales');
+  }, [grandExtraFees, grandTotalWithFees, productSalesList]);
+
+  const expenseLineItems = useMemo(() => {
+    const rows = expenseCategoryTotals.map(([label, amount]) => ({
+      label,
+      amount,
+      share: totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0,
+    }));
+    return compactFinancialLineItems(rows, 'Other Expenses');
+  }, [expenseCategoryTotals, totalExpenses]);
 
   const netIncomeList = useMemo(() => {
     const bucketKeys = createContinuousBuckets(range.start, range.end, netGrouping);
@@ -627,7 +766,6 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
   }, [transactions, expenses, range.start, range.end, netGrouping]);
 
-  const totalExpenses = useMemo(() => expenses.reduce((sum, expense) => sum + (expense.amount ?? 0), 0), [expenses]);
   const netIncome = grandTotalWithFees - totalExpenses;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
 
@@ -641,8 +779,6 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
   const pagedExpenseSummary = useMemo(() => paginate(expenseSummaryList, expenseSummaryCurrentPage, REPORT_PAGE_SIZE), [expenseSummaryList, expenseSummaryCurrentPage]);
   const expenseCategoryCurrentPage = Math.min(expenseCategoryPage, Math.max(1, Math.ceil(expenseCategoryTotals.length / REPORT_PAGE_SIZE)));
   const pagedExpenseCategories = useMemo(() => paginate(expenseCategoryTotals, expenseCategoryCurrentPage, REPORT_PAGE_SIZE), [expenseCategoryTotals, expenseCategoryCurrentPage]);
-  const netCurrentPage = Math.min(netPage, Math.max(1, Math.ceil(netIncomeList.length / REPORT_PAGE_SIZE)));
-  const pagedNetIncome = useMemo(() => paginate(netIncomeList, netCurrentPage, REPORT_PAGE_SIZE), [netIncomeList, netCurrentPage]);
   const productsCurrentPage = Math.min(productsPage, Math.max(1, Math.ceil(productSalesList.length / REPORT_PAGE_SIZE)));
   const pagedProductSales = useMemo(() => paginate(productSalesList, productsCurrentPage, REPORT_PAGE_SIZE), [productSalesList, productsCurrentPage]);
 
@@ -743,15 +879,26 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     return {
       title: 'Expense vs Revenue',
       filename: `expense-vs-revenue-${slugify(range.label)}`,
-      filterLines: [...baseFilterLines, `Grouping: ${netGrouping}`],
-      headers: ['Period', 'Revenue', 'Expenses', 'Net Income'],
-      rows: netIncomeList.map(item => [
-        formatBucketLabel(item.bucketStart, netGrouping),
-        fmt(item.revenue),
-        fmt(item.expenses),
-        fmt(item.revenue - item.expenses),
-      ]),
-      totals: ['Totals', fmt(grandTotalWithFees), fmt(totalExpenses), fmt(netIncome)],
+      filterLines: [...baseFilterLines, `Tracked periods: ${netIncomeList.length}`],
+      headers: ['Section', 'Description', 'Amount (PHP)', 'Share'],
+      rows: [
+        ...revenueLineItems.map(item => [
+          'Revenue',
+          item.label,
+          fmt(item.amount),
+          grandTotalWithFees > 0 ? `${item.share.toFixed(2)}%` : '',
+        ]),
+        ['Revenue', 'Total Revenue', fmt(grandTotalWithFees), grandTotalWithFees > 0 ? '100.00%' : ''],
+        ['', '', '', ''],
+        ...expenseLineItems.map(item => [
+          'Expenses',
+          item.label,
+          fmt(item.amount),
+          totalExpenses > 0 ? `${item.share.toFixed(2)}%` : '',
+        ]),
+        ['Expenses', 'Total Expenses', fmt(totalExpenses), totalExpenses > 0 ? '100.00%' : ''],
+      ],
+      totals: ['Net Income', 'Revenue - Expenses', fmt(netIncome), ''],
     };
   }, [
     activeTab,
@@ -782,8 +929,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     range.label,
     range.salesGrouping,
     range.start,
+    revenueLineItems,
     salesSummaryList,
     selectedCustomer,
+    expenseLineItems,
     totalExpenses,
     transactions.length,
   ]);
@@ -1715,59 +1864,54 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
             ))}
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100">
-              <h2 className="font-semibold text-slate-800">Expense vs Revenue Breakdown</h2>
+          {loading ? (
+            <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2 bg-white rounded-xl border border-slate-200">
+              <RefreshCw size={16} className="animate-spin" /> Loading net income report...
             </div>
-            {loading ? (
-              <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
-                <RefreshCw size={16} className="animate-spin" /> Loading net income report...
+          ) : grandTotalWithFees === 0 && totalExpenses === 0 ? (
+            <div className="py-16 text-center bg-white rounded-xl border border-slate-200">
+              <Banknote size={32} className="text-slate-300 mx-auto mb-3" />
+              <p className="text-slate-500 text-sm">No revenue or expenses in selected range</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                <FinancialStatementTable
+                  title="Revenue Line Items"
+                  rows={revenueLineItems}
+                  total={grandTotalWithFees}
+                  totalLabel="Total Revenue"
+                  tone="revenue"
+                />
+                <FinancialStatementTable
+                  title="Expense Line Items"
+                  rows={expenseLineItems}
+                  total={totalExpenses}
+                  totalLabel="Total Expenses"
+                  tone="expense"
+                />
               </div>
-            ) : netIncomeList.length === 0 ? (
-              <div className="py-16 text-center">
-                <Banknote size={32} className="text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-500 text-sm">No revenue or expenses in selected range</p>
+
+              <div className="bg-sky-50/70 rounded-xl border border-sky-100 p-5">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-sky-100 flex items-center justify-center">
+                      <TrendingUp size={22} className={netIncome >= 0 ? 'text-emerald-600' : 'text-red-500'} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 uppercase font-semibold">Net Income (Revenue - Expenses)</p>
+                      <p className={`text-2xl font-bold tabular-nums ${netIncome >= 0 ? 'text-slate-900' : 'text-red-600'}`}>₱{fmt(netIncome)}</p>
+                    </div>
+                  </div>
+                  <FormulaAmount label="Revenue" value={grandTotalWithFees} tone="revenue" />
+                  <FormulaAmount label="Expenses" value={totalExpenses} tone="expense" prefix="-" />
+                  <FormulaAmount label="Net Income" value={netIncome} tone={netIncome >= 0 ? 'net' : 'expense'} prefix="=" />
+                </div>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-                      <th className="px-4 py-3 text-left">Period</th>
-                      <th className="px-4 py-3 text-right">Revenue</th>
-                      <th className="px-4 py-3 text-right">Expenses</th>
-                      <th className="px-4 py-3 text-right">Net Income</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {pagedNetIncome.map(item => {
-                      const periodNet = item.revenue - item.expenses;
-                      return (
-                        <tr key={item.bucketStart} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">{formatBucketLabel(item.bucketStart, netGrouping)}</td>
-                          <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">₱{fmt(item.revenue)}</td>
-                          <td className="px-4 py-3 text-right text-red-500 font-semibold tabular-nums">₱{fmt(item.expenses)}</td>
-                          <td className={`px-4 py-3 text-right font-bold tabular-nums ${periodNet >= 0 ? 'text-slate-800' : 'text-red-600'}`}>₱{fmt(periodNet)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-900">
-                      <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Totals</td>
-                      <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">₱{fmt(grandTotalWithFees)}</td>
-                      <td className="px-4 py-3 text-right text-red-300 font-bold tabular-nums">₱{fmt(totalExpenses)}</td>
-                      <td className={`px-4 py-3 text-right font-bold tabular-nums ${netIncome >= 0 ? 'text-white' : 'text-red-300'}`}>₱{fmt(netIncome)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-                <Pagination page={netCurrentPage} pageSize={REPORT_PAGE_SIZE} totalItems={netIncomeList.length} onPageChange={setNetPage} />
-              </div>
-            )}
-          </div>
+            </>
+          )}
         </>
       )}
-
       {activeTab === 'products' && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

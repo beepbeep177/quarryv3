@@ -7,6 +7,7 @@ export type NavSection =
   | 'logistics-trucks'
   | 'logistics-pricing'
   | 'expenses'
+  | 'fuel-management'
   | 'reports'
   | 'access-control';
 

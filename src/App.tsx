@@ -113,7 +113,9 @@ export default function App() {
 
   function handleAddSuccess() {
     setRefreshKey(k => k + 1);
-    setActiveSection('daily-view');
+    if (!editingTransaction) {
+      setActiveSection('daily-view');
+    }
   }
 
   async function handleSignOut() {
@@ -174,9 +176,9 @@ export default function App() {
             {activeSection === 'customers-ar' && <AccountsReceivable canEdit={can('ACCOUNTS_RECEIVABLE_EDIT')} />}
             {activeSection === 'logistics-trucks' && <TruckList canAdd={can('TRUCKS_ADD')} canEdit={can('TRUCKS_EDIT')} canDelete={can('TRUCKS_DELETE')} />}
             {activeSection === 'logistics-pricing' && <PricingList canAdd={can('PRICING_ADD')} canEdit={can('PRICING_EDIT')} canDelete={can('PRICING_DELETE')} />}
-            {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canDelete={can('EXPENSES_DELETE')} />}
+            {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canEdit={can('EXPENSES_EDIT') || isManager} canDelete={can('EXPENSES_DELETE')} />}
             {activeSection === 'fuel-management' && <FuelManagement canAddPurchase={can('FUEL_PURCHASE_ADD') || isManager} canIssue={can('FUEL_ISSUANCE_ADD') || isManager} canAdjust={can('FUEL_ADJUST') || isManager} canExport={can('FUEL_EXPORT') || isManager} />}
-            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} />}
+            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} onEditTransaction={handleEditTransaction} />}
             {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
           </div>
         </div>

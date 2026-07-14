@@ -27,6 +27,7 @@ export type ActivityCode =
   | 'PRICING_DELETE'
   | 'EXPENSES_VIEW'
   | 'EXPENSES_ADD'
+  | 'EXPENSES_EDIT'
   | 'EXPENSES_DELETE'
   | 'FUEL_VIEW'
   | 'FUEL_PURCHASE_ADD'

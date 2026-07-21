@@ -6,6 +6,8 @@ import {
   FileBarChart2,
   ChevronDown,
   ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   PlusCircle,
   Eye,
   BookUser,
@@ -91,11 +93,31 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
 
     if (can('EXPENSES_VIEW')) {
       items.push(
-      {
-        id: 'expenses',
-        label: 'Expenses',
-        icon: <Banknote size={18} />,
-      },
+        {
+          id: 'expenses',
+          label: 'Expenses',
+          icon: <Banknote size={18} />,
+        },
+      );
+    }
+
+    if (can('FUEL_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push(
+        {
+          id: 'fuel-management',
+          label: 'Fuel Management',
+          icon: <Droplet size={18} />,
+        },
+      );
+    }
+
+    if (can('HAULER_OFFSET_LEDGER_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push(
+        {
+          id: 'hauler-offset-ledger',
+          label: 'Hauler Offset Ledger',
+          icon: <ReceiptText size={18} />,
+        },
       );
     }
 
@@ -147,6 +169,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
   };
 
   const [openGroup, setOpenGroup] = useState<string | null>(getDefaultOpen);
+  const [collapsed, setCollapsed] = useState(false);
 
   const isGroupActive = (item: MenuItem) => {
     if (!item.children) return activeSection === item.id;
@@ -157,9 +180,19 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
     setOpenGroup(prev => (prev === id ? null : id));
   };
 
+  const handleGroupClick = (item: MenuItem) => {
+    if (!collapsed) {
+      toggleGroup(item.id);
+      return;
+    }
+
+    const activeChild = item.children?.find(child => child.id === activeSection);
+    onNavigate(activeChild?.id ?? item.children?.[0]?.id ?? item.id);
+  };
+
   return (
-    <aside className="w-64 min-h-screen bg-slate-950 flex flex-col">
-      <div className="px-4 py-5 border-b border-slate-800 flex items-center gap-3 w-full">
+    <aside className={`${collapsed ? 'w-20' : 'w-64'} min-h-screen bg-slate-950 flex flex-col transition-all duration-200 ease-out shrink-0`}>
+      <div className={`${collapsed ? 'px-3 justify-center' : 'px-4'} py-5 border-b border-slate-800 flex items-center gap-3 w-full`}>
         <div className="w-12 h-12 rounded-full flex items-center justify-center p-0.5 shadow-sm shrink-0 bg-white/5">
           <img 
             src="/jafcor_logo.png" 
@@ -167,16 +200,28 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
             className="w-full h-full object-contain" 
           />
         </div>
-        <div className="min-w-0">
-          <p className="text-white font-bold text-base tracking-wide truncate">JAFCOR</p>
-          <p className="text-slate-400 text-xs truncate">Management System</p>
-        </div>
+        {!collapsed && (
+          <div className="min-w-0">
+            <p className="text-white font-bold text-base tracking-wide truncate">JAFCOR</p>
+            <p className="text-slate-400 text-xs truncate">Management System</p>
+          </div>
+        )}
+      </div>
+
+      <div className="px-3 pt-3">
+        <button
+          onClick={() => setCollapsed(value => !value)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'justify-end px-3'} py-2 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 transition-colors`}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {menuItems.map(item => {
           const hasChildren = !!item.children;
-          const isOpen = openGroup === item.id;
+          const isOpen = !collapsed && openGroup === item.id;
           const groupActive = isGroupActive(item);
 
           if (!hasChildren) {
@@ -184,14 +229,15 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
               <button
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                title={collapsed ? item.label : undefined}
+                className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   activeSection === item.id
                     ? 'bg-emerald-500/15 text-emerald-400'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                 }`}
               >
                 <span className={activeSection === item.id ? 'text-emerald-400' : ''}>{item.icon}</span>
-                {item.label}
+                {!collapsed && item.label}
               </button>
             );
           }
@@ -199,16 +245,23 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
           return (
             <div key={item.id}>
               <button
-                onClick={() => toggleGroup(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                onClick={() => handleGroupClick(item)}
+                title={collapsed ? item.label : undefined}
+                className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   groupActive
-                    ? 'text-emerald-400'
+                    ? collapsed
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : 'text-emerald-400'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                 }`}
               >
                 <span className={groupActive ? 'text-emerald-400' : ''}>{item.icon}</span>
-                <span className="flex-1 text-left">{item.label}</span>
-                {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </>
+                )}
               </button>
 
               {isOpen && (
@@ -235,8 +288,12 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       </nav>
 
       {/* Footer Update */}
-      <div className="px-5 py-4 border-t border-slate-800">
-        <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 Jafcor Dev Co.</p>
+      <div className={`${collapsed ? 'px-3 text-center' : 'px-5'} py-4 border-t border-slate-800`}>
+        {collapsed ? (
+          <p className="text-slate-600 text-xs" title="v1.0.0">&copy;</p>
+        ) : (
+          <p className="text-slate-600 text-xs">v1.0.0 &copy; 2026 Jafcor Dev Co.</p>
+        )}
       </div>
     </aside>
   );

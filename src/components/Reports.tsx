@@ -37,6 +37,7 @@ interface SalesSummary {
   offset: number;
   gcash: number;
   bankTransfer: number;
+  drFees: number;
   extraFees: number;
   total: number;
 }
@@ -309,6 +310,18 @@ function compactFinancialLineItems(rows: FinancialLineItem[], otherLabel: string
   ];
 }
 
+function reportNetSalesAmount(tx: TransactionWithRelations) {
+  return (tx.amount ?? 0) + (tx.dr_capitol ?? 0);
+}
+
+function reportDrFeesAmount(tx: TransactionWithRelations) {
+  return tx.dr_capitol ?? 0;
+}
+
+function reportExcludedFeesAmount(tx: TransactionWithRelations) {
+  return (tx.passway ?? 0) + (tx.kulot ?? 0);
+}
+
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 
 function PieChart({ data }: { data: { label: string; value: number }[] }) {
@@ -567,14 +580,15 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     transactions.forEach(tx => {
       const bucketStart = getBucketStart(tx.transaction_date, range.salesGrouping);
       if (!bucketMap[bucketStart]) {
-        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, gcash: 0, bankTransfer: 0, extraFees: 0, total: 0 };
+        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, gcash: 0, bankTransfer: 0, drFees: 0, extraFees: 0, total: 0 };
       }
 
       bucketMap[bucketStart].count += 1;
       bucketMap[bucketStart].volume += tx.volume_m3 ?? 0;
-      // total = base sales only (excluding extra fees)
-      bucketMap[bucketStart].total += tx.amount ?? 0;
-      bucketMap[bucketStart].extraFees += (tx.dr_capitol ?? 0) + (tx.passway ?? 0) + (tx.kulot ?? 0);
+      // Net sales includes DR fees; only Passway and Kulot are excluded.
+      bucketMap[bucketStart].total += reportNetSalesAmount(tx);
+      bucketMap[bucketStart].drFees += reportDrFeesAmount(tx);
+      bucketMap[bucketStart].extraFees += reportExcludedFeesAmount(tx);
 
       bucketMap[bucketStart].cash += getPaymentModeAmount(tx, 'CASH');
       bucketMap[bucketStart].po += getPaymentModeAmount(tx, 'P.O');
@@ -586,8 +600,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
   }, [transactions, range.salesGrouping]);
 
-  const grandNetSales = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0), [transactions]);
-  const grandExtraFees = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0) + (tx.passway ?? 0) + (tx.kulot ?? 0), 0), [transactions]);
+  const grandNetSales = useMemo(() => transactions.reduce((sum, tx) => sum + reportNetSalesAmount(tx), 0), [transactions]);
+  const grandDrFees = useMemo(() => transactions.reduce((sum, tx) => sum + reportDrFeesAmount(tx), 0), [transactions]);
+  const grandExtraFees = useMemo(() => transactions.reduce((sum, tx) => sum + reportExcludedFeesAmount(tx), 0), [transactions]);
   const grandTotalWithFees = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const grandVolume = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [transactions]);
   const cashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'CASH'), 0), [transactions]);
@@ -724,15 +739,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       amount: product.revenue,
       share: grandTotalWithFees > 0 ? (product.revenue / grandTotalWithFees) * 100 : 0,
     }));
-    if (grandExtraFees > 0) {
-      rows.push({
-        label: 'Other Sales',
-        amount: grandExtraFees,
-        share: grandTotalWithFees > 0 ? (grandExtraFees / grandTotalWithFees) * 100 : 0,
-      });
-    }
     return compactFinancialLineItems(rows, 'Other Sales');
-  }, [grandExtraFees, grandTotalWithFees, productSalesList]);
+  }, [grandTotalWithFees, productSalesList]);
 
   const expenseLineItems = useMemo(() => {
     const rows = expenseCategoryTotals.map(([label, amount]) => ({
@@ -794,7 +802,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
         title: 'Sales Summary',
         filename: `sales-summary-${slugify(range.label)}`,
         filterLines: baseFilterLines,
-        headers: ['Period', 'Transactions', 'Volume (m3)', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'Extra Fees', 'Net Sales'],
+        headers: ['Period', 'Transactions', 'Volume (m3)', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'DR Fees', 'Extra Fees', 'Net Sales'],
         rows: salesSummaryList.map(summary => [
           formatBucketLabel(summary.bucketStart, range.salesGrouping),
           summary.count,
@@ -804,10 +812,11 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           fmt(summary.offset),
           fmt(summary.gcash),
           fmt(summary.bankTransfer),
+          fmt(summary.drFees),
           fmt(summary.extraFees),
           fmt(summary.total),
         ]),
-        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandExtraFees), fmt(grandNetSales)],
+        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandDrFees), fmt(grandExtraFees), fmt(grandNetSales)],
       };
     }
 
@@ -910,6 +919,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     expenseCategoryTotals,
     gcashTotal,
     grandExtraFees,
+    grandDrFees,
     grandNetSales,
     grandTotalWithFees,
     grandVolume,
@@ -1452,6 +1462,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <th className="px-4 py-3 text-right">Offset</th>
                       <th className="px-4 py-3 text-right">GCash</th>
                       <th className="px-4 py-3 text-right">Bank</th>
+                      <th className="px-4 py-3 text-right">DR Fees</th>
                       <th className="px-4 py-3 text-right">Extra Fees</th>
                       <th className="px-4 py-3 text-right">Net Sales</th>
                     </tr>
@@ -1469,6 +1480,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums">{summary.offset > 0 ? `₱${fmt(summary.offset)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-blue-600 tabular-nums">{summary.gcash > 0 ? `₱${fmt(summary.gcash)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-violet-600 tabular-nums">{summary.bankTransfer > 0 ? `₱${fmt(summary.bankTransfer)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-emerald-600 tabular-nums">{summary.drFees > 0 ? `₱${fmt(summary.drFees)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-orange-500 tabular-nums">{summary.extraFees > 0 ? `₱${fmt(summary.extraFees)}` : '—'}</td>
                         <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(summary.total)}</td>
                       </tr>
@@ -1484,6 +1496,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(offsetTotal)}</td>
                       <td className="px-4 py-3 text-right text-blue-400 font-semibold tabular-nums">₱{fmt(gcashTotal)}</td>
                       <td className="px-4 py-3 text-right text-violet-400 font-semibold tabular-nums">₱{fmt(bankTransferTotal)}</td>
+                      <td className="px-4 py-3 text-right text-emerald-400 font-semibold tabular-nums">₱{fmt(grandDrFees)}</td>
                       <td className="px-4 py-3 text-right text-orange-400 font-semibold tabular-nums">₱{fmt(grandExtraFees)}</td>
                       <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandNetSales)}</td>
                     </tr>

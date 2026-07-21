@@ -364,6 +364,10 @@ export default function FuelManagement({
   async function handleIssuanceSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!actionBranchId) return;
+    if (issuanceForm.category === 'Hauler Offset' && !issuanceForm.truck_id) {
+      setError('Select a hauler truck before saving a Hauler Offset fuel issuance.');
+      return;
+    }
     setSaving(true);
     setError('');
     const { error: rpcError } = await supabase.rpc('create_fuel_issuance', {

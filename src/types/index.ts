@@ -8,6 +8,7 @@ export type NavSection =
   | 'logistics-pricing'
   | 'expenses'
   | 'fuel-management'
+  | 'hauler-offset-ledger'
   | 'reports'
   | 'access-control';
 

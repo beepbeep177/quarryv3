@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Plus, X, Loader2, CheckCircle, Droplet } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { ExpenseCategory } from '../lib/database.types';
+import type { ExpenseCategory, ExpenseWithCategory } from '../lib/database.types';
 
 interface ExpenseFormProps {
   onSuccess: () => void;
+  expense?: ExpenseWithCategory | null;
+  onCancelEdit?: () => void;
 }
 
 interface FormData {
@@ -25,7 +27,7 @@ const EMPTY_FORM: FormData = {
   expense_date: new Date().toISOString().split('T')[0],
 };
 
-export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
+export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: ExpenseFormProps) {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -38,6 +40,26 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
   useEffect(() => {
     fetchCategories();
   }, []);
+
+  useEffect(() => {
+    if (!expense) {
+      setForm(EMPTY_FORM);
+      setSaved(false);
+      setErrors({});
+      return;
+    }
+
+    setForm({
+      amount: String(expense.amount ?? ''),
+      category_id: expense.category_id ?? '',
+      payee_supplier: expense.payee_supplier ?? '',
+      description: expense.description ?? '',
+      liters_counter: expense.liters_counter == null ? '' : String(expense.liters_counter),
+      expense_date: expense.expense_date ?? EMPTY_FORM.expense_date,
+    });
+    setSaved(false);
+    setErrors({});
+  }, [expense]);
 
   async function fetchCategories() {
     const { data } = await supabase
@@ -105,23 +127,29 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
     }
 
     setSaving(true);
-    const { error } = await supabase.from('expenses').insert({
+    const payload = {
       expense_date: form.expense_date,
       category_id: form.category_id,
       amount: parseFloat(form.amount),
       payee_supplier: form.payee_supplier.trim(),
       description: form.description,
       liters_counter: selectedCat?.name === 'Diesel' ? parseFloat(form.liters_counter) : null,
-    });
+    };
+
+    const { error } = expense
+      ? await supabase.from('expenses').update(payload).eq('id', expense.id)
+      : await supabase.from('expenses').insert(payload);
 
     setSaving(false);
     if (!error) {
       setSaved(true);
       setTimeout(() => {
         onSuccess();
-        setForm(EMPTY_FORM);
         setSaved(false);
-        if (categories.length > 0) {
+        if (!expense) {
+          setForm(EMPTY_FORM);
+        }
+        if (!expense && categories.length > 0) {
           setForm(f => ({ ...f, category_id: categories[0].id }));
         }
       }, 800);
@@ -138,7 +166,19 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
-      <h2 className="text-lg font-bold text-slate-800 mb-5">Add New Expense</h2>
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <h2 className="text-lg font-bold text-slate-800">{expense ? 'Edit Expense' : 'Add New Expense'}</h2>
+        {expense && onCancelEdit && (
+          <button
+            type="button"
+            onClick={onCancelEdit}
+            className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            title="Cancel edit"
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Amount */}
@@ -309,11 +349,11 @@ export default function ExpenseForm({ onSuccess }: ExpenseFormProps) {
           className="w-full py-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 text-white font-semibold text-sm transition-all flex items-center justify-center gap-2"
         >
           {saved ? (
-            <><CheckCircle size={16} /> Expense Saved!</>
+            <><CheckCircle size={16} /> {expense ? 'Expense Updated!' : 'Expense Saved!'}</>
           ) : saving ? (
             <><Loader2 size={16} className="animate-spin" /> Saving...</>
           ) : (
-            'Save Expense'
+            expense ? 'Update Expense' : 'Save Expense'
           )}
         </button>
       </form>

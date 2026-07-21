@@ -4,6 +4,7 @@ import ExpenseForm from './ExpenseForm';
 import WeeklyAnalytics from './WeeklyAnalytics';
 import ExpensesLedger from './ExpensesLedger';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import type { ExpenseWithCategory } from '../lib/database.types';
 
 interface ExpensesProps {
   canAdd?: boolean;
@@ -13,8 +14,10 @@ interface ExpensesProps {
 
 export default function Expenses({ canAdd = false, canEdit = false, canDelete = false }: ExpensesProps) {
   const [refreshKey, setRefreshKey] = useState(0);
+  const [editingExpense, setEditingExpense] = useState<ExpenseWithCategory | null>(null);
 
   function handleExpenseSuccess() {
+    setEditingExpense(null);
     setRefreshKey(k => k + 1);
   }
 
@@ -33,18 +36,27 @@ export default function Expenses({ canAdd = false, canEdit = false, canDelete = 
       {!canAdd && !canEdit && !canDelete && <ReadOnlyNotice message="This user group can review expenses and analytics only." />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {canAdd && (
+        {(canAdd || editingExpense) && (
           <div className="lg:col-span-2">
-            <ExpenseForm onSuccess={handleExpenseSuccess} />
+            <ExpenseForm
+              onSuccess={handleExpenseSuccess}
+              expense={editingExpense}
+              onCancelEdit={() => setEditingExpense(null)}
+            />
           </div>
         )}
 
-        <div className={!canAdd ? 'lg:col-span-3' : ''}>
+        <div className={!canAdd && !editingExpense ? 'lg:col-span-3' : ''}>
           <WeeklyAnalytics refreshKey={refreshKey} />
         </div>
       </div>
 
-      <ExpensesLedger refreshKey={refreshKey} canEdit={canEdit} canDelete={canDelete} />
+      <ExpensesLedger
+        refreshKey={refreshKey}
+        canEdit={canEdit}
+        canDelete={canDelete}
+        onEdit={setEditingExpense}
+      />
     </div>
   );
 }

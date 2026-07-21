@@ -10,6 +10,7 @@ import TruckList from './components/TruckList';
 import PricingList from './components/PricingList';
 import Expenses from './components/Expenses';
 import FuelManagement from './components/FuelManagement';
+import HaulerOffsetLedger from './components/HaulerOffsetLedger';
 import Reports from './components/Reports';
 import AccessControl from './components/AccessControl';
 import AuthPage from './pages/AuthPage';
@@ -39,6 +40,7 @@ export default function App() {
     'logistics-pricing': can('PRICING_VIEW'),
     expenses: can('EXPENSES_VIEW'),
     'fuel-management': can('FUEL_VIEW') || isManager,
+    'hauler-offset-ledger': can('HAULER_OFFSET_LEDGER_VIEW') || isManager,
     reports: can('REPORTS_VIEW'),
     'access-control': can('USER_GROUP_ACCESS_VIEW') || can('USER_GROUP_ACCESS_MANAGE') || can('USER_ACCOUNTS_MANAGE') || can('AUDIT_LOG_VIEW'),
   };
@@ -55,6 +57,7 @@ export default function App() {
       'logistics-pricing',
       'expenses',
       'fuel-management',
+      'hauler-offset-ledger',
       'reports',
       'access-control',
     ] as NavSection[]).find(section => canViewSection[section]);
@@ -113,6 +116,9 @@ export default function App() {
 
   function handleAddSuccess() {
     setRefreshKey(k => k + 1);
+    if (!editingTransaction) {
+      setActiveSection('daily-view');
+    }
     if (!editingTransaction) {
       setActiveSection('daily-view');
     }
@@ -178,6 +184,7 @@ export default function App() {
             {activeSection === 'logistics-pricing' && <PricingList canAdd={can('PRICING_ADD')} canEdit={can('PRICING_EDIT')} canDelete={can('PRICING_DELETE')} />}
             {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canEdit={can('EXPENSES_EDIT') || isManager} canDelete={can('EXPENSES_DELETE')} />}
             {activeSection === 'fuel-management' && <FuelManagement canAddPurchase={can('FUEL_PURCHASE_ADD') || isManager} canIssue={can('FUEL_ISSUANCE_ADD') || isManager} canAdjust={can('FUEL_ADJUST') || isManager} canExport={can('FUEL_EXPORT') || isManager} />}
+            {activeSection === 'hauler-offset-ledger' && <HaulerOffsetLedger canAdd={can('HAULER_OFFSET_LEDGER_ADD') || isManager} canAdjust={can('HAULER_OFFSET_LEDGER_ADJUST') || isManager} canExport={can('HAULER_OFFSET_LEDGER_EXPORT') || isManager} canViewDetail={can('HAULER_OFFSET_LEDGER_VIEW_DETAIL') || isManager} canViewStatement={can('HAULER_STATEMENT_VIEW') || isManager} canExportStatement={can('HAULER_STATEMENT_EXPORT') || isManager} />}
             {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} onEditTransaction={handleEditTransaction} />}
             {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
           </div>

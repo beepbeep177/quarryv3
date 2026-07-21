@@ -34,6 +34,13 @@ export type ActivityCode =
   | 'FUEL_ISSUANCE_ADD'
   | 'FUEL_ADJUST'
   | 'FUEL_EXPORT'
+  | 'HAULER_OFFSET_LEDGER_VIEW'
+  | 'HAULER_OFFSET_LEDGER_ADD'
+  | 'HAULER_OFFSET_LEDGER_EXPORT'
+  | 'HAULER_OFFSET_LEDGER_VIEW_DETAIL'
+  | 'HAULER_OFFSET_LEDGER_ADJUST'
+  | 'HAULER_STATEMENT_VIEW'
+  | 'HAULER_STATEMENT_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -494,6 +501,68 @@ export type Database = {
           },
         ];
       };
+      hauler_offset_entries: {
+        Row: {
+          id: string;
+          hauler_id: string;
+          transaction_date: string;
+          transaction_type: 'OPENING_BALANCE' | 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'ADJUSTMENT';
+          reference_no: string;
+          description: string;
+          debit_amount: number;
+          credit_amount: number;
+          status: 'ACTIVE' | 'VOIDED';
+          remarks: string;
+          details: Json;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          voided_by: string | null;
+          voided_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          hauler_id: string;
+          transaction_date?: string;
+          transaction_type: 'OPENING_BALANCE' | 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'ADJUSTMENT';
+          reference_no?: string;
+          description?: string;
+          debit_amount?: number;
+          credit_amount?: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          remarks?: string;
+          details?: Json;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Update: {
+          hauler_id?: string;
+          transaction_date?: string;
+          transaction_type?: 'OPENING_BALANCE' | 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'ADJUSTMENT';
+          reference_no?: string;
+          description?: string;
+          debit_amount?: number;
+          credit_amount?: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          remarks?: string;
+          details?: Json;
+          created_by?: string | null;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'hauler_offset_entries_hauler_id_fkey';
+            columns: ['hauler_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       fuel_branches: {
         Row: {
           id: string;
@@ -770,6 +839,59 @@ export type Database = {
         };
         Returns: void;
       };
+      create_hauler_offset_entry: {
+        Args: {
+          p_hauler_id: string;
+          p_transaction_date: string;
+          p_transaction_type: 'OPENING_BALANCE' | 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'ADJUSTMENT';
+          p_reference_no: string;
+          p_description: string;
+          p_amount: number;
+          p_entry_side?: 'DEBIT' | 'CREDIT' | null;
+          p_remarks?: string;
+          p_details?: Json;
+        };
+        Returns: Database['public']['Tables']['hauler_offset_entries']['Row'];
+      };
+      void_hauler_offset_entry: {
+        Args: {
+          p_entry_id: string;
+          p_reason?: string;
+        };
+        Returns: Database['public']['Tables']['hauler_offset_entries']['Row'];
+      };
+      get_hauler_offset_ledger: {
+        Args: {
+          p_hauler_id: string;
+          p_date_from: string;
+          p_date_to: string;
+        };
+        Returns: {
+          row_kind: 'SUMMARY' | 'ENTRY';
+          line_no: number;
+          hauler_id: string;
+          hauler_name: string;
+          transaction_date: string | null;
+          transaction_type: 'OPENING_BALANCE' | 'HAULING_SERVICE' | 'PRODUCT_OFFSET' | 'DIESEL_OFFSET' | 'CASH_PAYMENT' | 'ADJUSTMENT' | null;
+          source_module: 'hauler_offset_entries' | 'transactions' | 'fuel_issuances' | null;
+          source_id: string | null;
+          reference_no: string;
+          description: string;
+          debit_amount: number;
+          credit_amount: number;
+          running_balance: number;
+          opening_balance: number;
+          hauling_earnings: number;
+          product_offsets: number;
+          diesel_offsets: number;
+          cash_payments: number;
+          adjustments_debit: number;
+          adjustments_credit: number;
+          closing_balance: number;
+          source_payload: Json;
+          created_at: string;
+        }[];
+      };
       create_fuel_purchase: {
         Args: {
           p_branch_id: string;
@@ -833,6 +955,8 @@ export type Pricing = Database['public']['Tables']['pricing']['Row'];
 export type Transaction = Database['public']['Tables']['transactions']['Row'];
 export type ExpenseCategory = Database['public']['Tables']['expense_categories']['Row'];
 export type Expense = Database['public']['Tables']['expenses']['Row'];
+export type HaulerOffsetEntry = Database['public']['Tables']['hauler_offset_entries']['Row'];
+export type HaulerOffsetLedgerRow = Database['public']['Functions']['get_hauler_offset_ledger']['Returns'][number];
 export type FuelBranch = Database['public']['Tables']['fuel_branches']['Row'];
 export type FuelInventoryState = Database['public']['Tables']['fuel_inventory_state']['Row'];
 export type FuelPurchase = Database['public']['Tables']['fuel_purchases']['Row'];

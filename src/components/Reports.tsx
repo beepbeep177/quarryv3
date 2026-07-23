@@ -20,6 +20,7 @@ import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelatio
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import { getPaymentModeAmount } from '../lib/payment';
+import ExpensesLedger from './ExpensesLedger';
 
 export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
@@ -1857,6 +1858,12 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
               )}
             </div>
           )}
+
+          <ExpensesLedger
+            expenses={expenses}
+            loading={loading}
+            onRefresh={fetchReportData}
+          />
         </>
       )}
 

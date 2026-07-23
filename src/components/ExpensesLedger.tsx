@@ -8,7 +8,11 @@ import { paginate } from '../lib/pagination';
 const PAGE_SIZE = 10;
 
 interface ExpensesLedgerProps {
-  refreshKey: number;
+  refreshKey?: number;
+  expenses?: ExpenseWithCategory[];
+  loading?: boolean;
+  title?: string;
+  onRefresh?: () => void | Promise<void>;
   canEdit?: boolean;
   canDelete?: boolean;
   onEdit?: (expense: ExpenseWithCategory) => void;
@@ -28,34 +32,50 @@ const categoryColors: Record<string, { bg: string; text: string; border: string 
   Miscellaneous: { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' },
 };
 
-export default function ExpensesLedger({ refreshKey, canEdit = false, canDelete = false, onEdit }: ExpensesLedgerProps) {
-  const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpenses, loading: providedLoading, title = 'Expense Ledger', onRefresh, canEdit = false, canDelete = false, onEdit }: ExpensesLedgerProps) {
+  const [internalExpenses, setInternalExpenses] = useState<ExpenseWithCategory[]>([]);
+  const [internalLoading, setInternalLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const isControlled = providedExpenses !== undefined;
+  const expenses = providedExpenses ?? internalExpenses;
+  const loading = providedLoading ?? internalLoading;
 
   useEffect(() => {
-    fetchExpenses();
-  }, [refreshKey]);
+    if (!isControlled) fetchExpenses();
+  }, [isControlled, refreshKey]);
   useEffect(() => { setPage(1); }, [search, refreshKey]);
 
   async function fetchExpenses() {
-    setLoading(true);
+    setInternalLoading(true);
     const { data } = await supabase
       .from('expenses')
       .select('*, expense_categories(*)')
       .order('expense_date', { ascending: false })
       .order('created_at', { ascending: false });
-    setExpenses((data ?? []) as ExpenseWithCategory[]);
-    setLoading(false);
+    setInternalExpenses((data ?? []) as ExpenseWithCategory[]);
+    setInternalLoading(false);
+  }
+
+  async function refreshExpenses() {
+    if (onRefresh) {
+      await onRefresh();
+      return;
+    }
+
+    await fetchExpenses();
   }
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this expense?')) return;
     setDeletingId(id);
     await supabase.from('expenses').delete().eq('id', id);
-    setExpenses(prev => prev.filter(e => e.id !== id));
+    if (isControlled) {
+      await onRefresh?.();
+    } else {
+      setInternalExpenses(prev => prev.filter(e => e.id !== id));
+    }
     setDeletingId(null);
   }
 
@@ -76,9 +96,9 @@ export default function ExpensesLedger({ refreshKey, canEdit = false, canDelete 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-xl font-bold text-slate-800">Expense Ledger</h2>
+        <h2 className="text-xl font-bold text-slate-800">{title}</h2>
         <button
-          onClick={fetchExpenses}
+          onClick={refreshExpenses}
           disabled={loading}
           className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
         >

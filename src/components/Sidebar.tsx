@@ -121,16 +121,6 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
-    if (can('FUEL_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
-      items.push(
-      {
-        id: 'fuel-management',
-        label: 'Fuel Management',
-        icon: <Droplet size={18} />,
-      },
-      );
-    }
-
     if (can('REPORTS_VIEW')) {
       items.push(
         {

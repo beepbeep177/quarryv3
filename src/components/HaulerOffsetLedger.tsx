@@ -27,6 +27,15 @@ type ManualType = 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'OPENING_BALANCE' | 'ADJU
 type EntrySide = 'DEBIT' | 'CREDIT';
 type QuickFilter = 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_QUARTER' | 'CUSTOM';
 
+interface HaulingLineItem {
+  id: string;
+  truck_id: string;
+  truck_plate: string;
+  driver_name: string;
+  trips: string;
+  rate_per_trip: string;
+}
+
 interface HaulerOffsetLedgerProps {
   canAdd?: boolean;
   canAdjust?: boolean;
@@ -46,9 +55,11 @@ interface EntryForm {
   remarks: string;
   trip_count: string;
   truck_count: string;
+  truck_id: string;
   truck_plate: string;
   driver_name: string;
   rate_per_trip: string;
+  hauling_items: HaulingLineItem[];
   payment_method: string;
   payment_reference: string;
   reason: string;
@@ -170,6 +181,17 @@ function typeBadgeClass(type: HaulerOffsetLedgerRow['transaction_type']) {
   }
 }
 
+function createHaulingLineItem(): HaulingLineItem {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    truck_id: '',
+    truck_plate: '',
+    driver_name: '',
+    trips: '',
+    rate_per_trip: '',
+  };
+}
+
 function emptyForm(defaultType: ManualType = 'HAULING_SERVICE'): EntryForm {
   return {
     transaction_type: defaultType,
@@ -181,9 +203,11 @@ function emptyForm(defaultType: ManualType = 'HAULING_SERVICE'): EntryForm {
     remarks: '',
     trip_count: '',
     truck_count: '',
+    truck_id: '',
     truck_plate: '',
     driver_name: '',
     rate_per_trip: '',
+    hauling_items: [createHaulingLineItem()],
     payment_method: '',
     payment_reference: '',
     reason: '',
@@ -200,6 +224,7 @@ export default function HaulerOffsetLedger({
 }: HaulerOffsetLedgerProps) {
   const initialRange = monthRange();
   const [haulers, setHaulers] = useState<Customer[]>([]);
+  const [haulerTrucks, setHaulerTrucks] = useState<HaulerTruck[]>([]);
   const [haulerId, setHaulerId] = useState('');
   const [dateFrom, setDateFrom] = useState(initialRange.start);
   const [dateTo, setDateTo] = useState(initialRange.end);
@@ -209,6 +234,9 @@ export default function HaulerOffsetLedger({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
@@ -217,6 +245,10 @@ export default function HaulerOffsetLedger({
   const canManualAdd = canAdd || canAdjust;
   const summary = ledgerRows.find(row => row.row_kind === 'SUMMARY');
   const selectedHauler = haulers.find(hauler => hauler.id === haulerId) ?? null;
+  const selectedHaulerTrucks = useMemo(
+    () => haulerTrucks.filter(truck => truck.customer_id === haulerId),
+    [haulerId, haulerTrucks],
+  );
   const ledgerEntries = useMemo(
     () => ledgerRows.filter((row): row is LedgerEntry => row.row_kind === 'ENTRY'),
     [ledgerRows],
@@ -242,6 +274,25 @@ export default function HaulerOffsetLedger({
   const cashPayments = summary?.cash_payments ?? 0;
   const adjustmentsNet = (summary?.adjustments_credit ?? 0) - (summary?.adjustments_debit ?? 0);
   const closingBalance = summary?.closing_balance ?? 0;
+  const haulingLineTotals = useMemo(() => {
+    const rows = form.hauling_items.map(item => {
+      const trips = Number(item.trips);
+      const rate = Number(item.rate_per_trip);
+      return {
+        ...item,
+        tripsValue: Number.isFinite(trips) ? trips : 0,
+        rateValue: Number.isFinite(rate) ? rate : 0,
+        amount: Number.isFinite(trips) && Number.isFinite(rate) ? trips * rate : 0,
+      };
+    });
+    return {
+      rows,
+      trips: rows.reduce((sum, item) => sum + item.tripsValue, 0),
+      amount: rows.reduce((sum, item) => sum + item.amount, 0),
+      truckCount: rows.filter(item => item.truck_id).length,
+    };
+  }, [form.hauling_items]);
+  const haulingServiceAmount = haulingLineTotals.amount;
 
   useEffect(() => {
     fetchHaulers();
@@ -272,8 +323,11 @@ export default function HaulerOffsetLedger({
       return;
     }
 
+    const trucks = (data ?? []) as HaulerTruck[];
+    setHaulerTrucks(trucks);
+
     const unique = new Map<string, Customer>();
-    ((data ?? []) as HaulerTruck[]).forEach(truck => {
+    trucks.forEach(truck => {
       if (truck.customers) unique.set(truck.customers.id, truck.customers);
     });
     const nextHaulers = Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -285,15 +339,18 @@ export default function HaulerOffsetLedger({
     }
   }
 
-  async function fetchLedger() {
-    if (!haulerId) return;
+  async function fetchLedger(nextRange?: { haulerId?: string; dateFrom?: string; dateTo?: string }) {
+    const targetHaulerId = nextRange?.haulerId ?? haulerId;
+    const targetDateFrom = nextRange?.dateFrom ?? dateFrom;
+    const targetDateTo = nextRange?.dateTo ?? dateTo;
+    if (!targetHaulerId) return;
     setLoading(true);
     setError('');
 
     const { data, error: ledgerError } = await supabase.rpc('get_hauler_offset_ledger', {
-      p_hauler_id: haulerId,
-      p_date_from: dateFrom,
-      p_date_to: dateTo,
+      p_hauler_id: targetHaulerId,
+      p_date_from: targetDateFrom,
+      p_date_to: targetDateTo,
     });
 
     if (ledgerError) {
@@ -332,23 +389,91 @@ export default function HaulerOffsetLedger({
     setDateTo(value);
   }
 
+  function handleHaulerChange(value: string) {
+    setHaulerId(value);
+    setForm(current => ({
+      ...current,
+      truck_id: '',
+      truck_plate: '',
+      driver_name: '',
+      hauling_items: [createHaulingLineItem()],
+    }));
+  }
+
   function openAddModal() {
     setForm(emptyForm(canAdd ? 'HAULING_SERVICE' : 'OPENING_BALANCE'));
+    setFormError('');
+    setSuccessMessage('');
     setShowAddModal(true);
   }
 
   function setFormValue<K extends keyof EntryForm>(key: K, value: EntryForm[K]) {
     setForm(current => ({ ...current, [key]: value }));
+    setFormError('');
+  }
+
+  function addHaulingLineItem() {
+    setForm(current => ({
+      ...current,
+      hauling_items: [...current.hauling_items, createHaulingLineItem()],
+    }));
+    setFormError('');
+  }
+
+  function removeHaulingLineItem(id: string) {
+    setForm(current => ({
+      ...current,
+      hauling_items: current.hauling_items.length > 1
+        ? current.hauling_items.filter(item => item.id !== id)
+        : current.hauling_items,
+    }));
+    setFormError('');
+  }
+
+  function updateHaulingLineItem(id: string, changes: Partial<HaulingLineItem>) {
+    setForm(current => ({
+      ...current,
+      hauling_items: current.hauling_items.map(item => item.id === id ? { ...item, ...changes } : item),
+    }));
+    setFormError('');
+  }
+
+  function setHaulingLineTruck(lineId: string, truckId: string) {
+    const truck = selectedHaulerTrucks.find(item => item.id === truckId);
+    updateHaulingLineItem(lineId, {
+      truck_id: truck?.id ?? '',
+      truck_plate: truck?.plate_number ?? '',
+      driver_name: truck?.driver_name ?? '',
+    });
+  }
+
+  function getHaulingDescription() {
+    const selectedRows = haulingLineTotals.rows.filter(item => item.truck_id);
+    const truckLabels = selectedRows.map(item => item.truck_plate).filter(Boolean);
+    const tripsLabel = `${fmt(haulingLineTotals.trips).replace('.00', '')} trip${haulingLineTotals.trips === 1 ? '' : 's'}`;
+    if (truckLabels.length === 0) return tripsLabel;
+    return `${tripsLabel} - ${truckLabels.join(', ')}`;
   }
 
   function buildDetails() {
-    const details: Record<string, string | number> = {};
+    const details: Record<string, Json> = {};
     if (form.transaction_type === 'HAULING_SERVICE') {
-      if (form.trip_count) details.trip_count = Number(form.trip_count) || 0;
-      if (form.truck_count) details.truck_count = Number(form.truck_count) || 0;
-      if (form.truck_plate) details.truck_plate = form.truck_plate.trim();
-      if (form.driver_name) details.driver_name = form.driver_name.trim();
-      if (form.rate_per_trip) details.rate_per_trip = Number(form.rate_per_trip) || 0;
+      const lineItems = haulingLineTotals.rows
+        .filter(item => item.truck_id || item.tripsValue > 0 || item.rateValue > 0)
+        .map(item => ({
+          truck_id: item.truck_id,
+          truck_plate: item.truck_plate,
+          driver_name: item.driver_name,
+          trips: item.tripsValue,
+          rate_per_trip: item.rateValue,
+          amount: item.amount,
+        }));
+      details.line_items = lineItems;
+      details.trip_count = haulingLineTotals.trips;
+      details.truck_count = haulingLineTotals.truckCount;
+      details.truck_plate = lineItems.map(item => item.truck_plate).filter(Boolean).join(', ');
+      details.driver_name = lineItems.map(item => item.driver_name).filter(Boolean).join(', ');
+      details.total_amount = haulingLineTotals.amount;
     }
     if (form.transaction_type === 'CASH_PAYMENT') {
       if (form.payment_method) details.payment_method = form.payment_method.trim();
@@ -363,20 +488,52 @@ export default function HaulerOffsetLedger({
   async function saveManualEntry(event: React.FormEvent) {
     event.preventDefault();
     if (!haulerId || !canManualAdd) return;
-    const amount = Number(form.amount);
+
+    const isHaulingService = form.transaction_type === 'HAULING_SERVICE';
+    let amount = Number(form.amount);
+    if (isHaulingService) {
+      if (selectedHaulerTrucks.length === 0) {
+        setFormError('No assigned hauler trucks found. Assign trucks to this hauler in Logistics first.');
+        return;
+      }
+
+      for (const [index, item] of haulingLineTotals.rows.entries()) {
+        const rowLabel = `Line ${index + 1}`;
+        if (!item.truck_id) {
+          setFormError(`${rowLabel}: select an assigned truck.`);
+          return;
+        }
+        if (!Number.isFinite(item.tripsValue) || item.tripsValue <= 0) {
+          setFormError(`${rowLabel}: trips must be greater than zero.`);
+          return;
+        }
+        if (!Number.isFinite(item.rateValue) || item.rateValue <= 0) {
+          setFormError(`${rowLabel}: rate per trip must be greater than zero.`);
+          return;
+        }
+      }
+
+      if (haulingLineTotals.amount <= 0) {
+        setFormError('Total hauling amount must be greater than zero.');
+        return;
+      }
+      amount = haulingLineTotals.amount;
+    }
+
     if (!Number.isFinite(amount) || amount <= 0) {
-      setError('Amount must be greater than zero.');
+      setFormError('Amount must be greater than zero.');
       return;
     }
 
     setSaving(true);
     setError('');
-    const { error: rpcError } = await supabase.rpc('create_hauler_offset_entry', {
+    setFormError('');
+    const { data: savedEntry, error: rpcError } = await supabase.rpc('create_hauler_offset_entry', {
       p_hauler_id: haulerId,
       p_transaction_date: form.transaction_date,
       p_transaction_type: form.transaction_type,
       p_reference_no: form.reference_no.trim(),
-      p_description: form.description.trim(),
+      p_description: isHaulingService ? (form.description.trim() || getHaulingDescription()) : form.description.trim(),
       p_amount: amount,
       p_entry_side: form.transaction_type === 'OPENING_BALANCE' || form.transaction_type === 'ADJUSTMENT' ? form.entry_side : null,
       p_remarks: form.remarks.trim(),
@@ -385,12 +542,28 @@ export default function HaulerOffsetLedger({
     setSaving(false);
 
     if (rpcError) {
-      setError(rpcError.message);
+      setFormError(rpcError.message);
       return;
     }
 
     setShowAddModal(false);
-    await fetchLedger();
+    setSuccessMessage('Hauler transaction saved successfully.');
+    const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
+    setHighlightedSourceId(savedSourceId);
+    window.setTimeout(() => {
+      setSuccessMessage('');
+      setHighlightedSourceId(null);
+    }, 3500);
+
+    const savedDate = form.transaction_date || todayInput();
+    const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
+    const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
+    if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
+      setQuickFilter('CUSTOM');
+      setDateFrom(nextDateFrom);
+      setDateTo(nextDateTo);
+    }
+    await fetchLedger({ dateFrom: nextDateFrom, dateTo: nextDateTo });
   }
 
   async function voidManualEntry(entry: LedgerEntry) {
@@ -582,7 +755,7 @@ export default function HaulerOffsetLedger({
               <FileText size={15} /> Export PDF
             </button>
           )}
-          <button onClick={fetchLedger} disabled={loading || !haulerId} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-60">
+          <button onClick={() => fetchLedger()} disabled={loading || !haulerId} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-60">
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -593,7 +766,7 @@ export default function HaulerOffsetLedger({
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
           <Field label="Hauler">
-            <select value={haulerId} onChange={e => setHaulerId(e.target.value)} className={inputClass}>
+            <select value={haulerId} onChange={e => handleHaulerChange(e.target.value)} className={inputClass}>
               <option value="">Select hauler...</option>
               {haulers.map(hauler => <option key={hauler.id} value={hauler.id}>{hauler.name}</option>)}
             </select>
@@ -625,6 +798,12 @@ export default function HaulerOffsetLedger({
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
           {error}
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-4 py-3 text-sm font-medium">
+          {successMessage}
         </div>
       )}
 
@@ -693,7 +872,7 @@ export default function HaulerOffsetLedger({
                         <tr
                           key={`${entry.source_module}-${entry.source_id}`}
                           onDoubleClick={() => canViewDetail && setSelectedEntry(entry)}
-                          className={`hover:bg-slate-50 transition-colors ${canViewDetail ? 'cursor-pointer' : ''}`}
+                          className={`${entry.source_id === highlightedSourceId ? 'bg-emerald-50 animate-pulse' : 'hover:bg-slate-50'} transition-colors ${canViewDetail ? 'cursor-pointer' : ''}`}
                           title={canViewDetail ? 'Double-click to view details' : undefined}
                         >
                           <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDate(entry.transaction_date)}</td>
@@ -761,10 +940,16 @@ export default function HaulerOffsetLedger({
                 <h2 className="text-lg font-bold text-slate-800">Add Hauler Transaction</h2>
                 <p className="text-xs text-slate-500 mt-1">{selectedHauler?.name}</p>
               </div>
-              <button type="button" onClick={() => setShowAddModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100"><X size={18} /></button>
+              <button type="button" onClick={() => { setShowAddModal(false); setFormError(''); }} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100"><X size={18} /></button>
             </div>
 
             <div className="p-6 space-y-5">
+              {formError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {formError}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Transaction Type">
                   <select value={form.transaction_type} onChange={e => setFormValue('transaction_type', e.target.value as ManualType)} className={inputClass}>
@@ -777,9 +962,11 @@ export default function HaulerOffsetLedger({
                 <Field label="Reference">
                   <input value={form.reference_no} onChange={e => setFormValue('reference_no', e.target.value)} className={inputClass} placeholder="TRP-2026-0701-001" />
                 </Field>
-                <Field label="Amount">
-                  <input required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setFormValue('amount', e.target.value)} className={inputClass} />
-                </Field>
+                {form.transaction_type !== 'HAULING_SERVICE' && (
+                  <Field label="Amount">
+                    <input required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setFormValue('amount', e.target.value)} className={inputClass} />
+                  </Field>
+                )}
                 {(form.transaction_type === 'OPENING_BALANCE' || form.transaction_type === 'ADJUSTMENT') && (
                   <Field label="Entry Side">
                     <select value={form.entry_side} onChange={e => setFormValue('entry_side', e.target.value as EntrySide)} className={inputClass}>
@@ -789,19 +976,93 @@ export default function HaulerOffsetLedger({
                   </Field>
                 )}
                 <Field label="Description">
-                  <input value={form.description} onChange={e => setFormValue('description', e.target.value)} className={inputClass} placeholder="Short transaction description" />
+                  <input value={form.description} onChange={e => setFormValue('description', e.target.value)} className={inputClass} placeholder={form.transaction_type === 'HAULING_SERVICE' ? 'Auto-generated if blank' : 'Short transaction description'} />
                 </Field>
               </div>
 
               {form.transaction_type === 'HAULING_SERVICE' && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-                  <p className="text-xs font-bold uppercase text-slate-500 mb-3">Hauling Details</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <Field label="Trips"><input type="number" min="0" value={form.trip_count} onChange={e => setFormValue('trip_count', e.target.value)} className={inputClass} /></Field>
-                    <Field label="Trucks"><input type="number" min="0" value={form.truck_count} onChange={e => setFormValue('truck_count', e.target.value)} className={inputClass} /></Field>
-                    <Field label="Rate / Trip"><input type="number" min="0" step="0.01" value={form.rate_per_trip} onChange={e => setFormValue('rate_per_trip', e.target.value)} className={inputClass} /></Field>
-                    <Field label="Truck / Plate"><input value={form.truck_plate} onChange={e => setFormValue('truck_plate', e.target.value)} className={inputClass} /></Field>
-                    <Field label="Driver"><input value={form.driver_name} onChange={e => setFormValue('driver_name', e.target.value)} className={inputClass} /></Field>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Hauling Details</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Add one row per assigned truck. Amount is trips multiplied by rate.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addHaulingLineItem}
+                      disabled={selectedHaulerTrucks.length === 0}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <Plus size={14} /> Add Truck
+                    </button>
+                  </div>
+
+                  {selectedHaulerTrucks.length === 0 && (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      No trucks are assigned to this hauler yet. Assign hauler trucks in Logistics first.
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {form.hauling_items.map((item, index) => {
+                      const lineAmount = (Number(item.trips) || 0) * (Number(item.rate_per_trip) || 0);
+                      return (
+                        <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                          <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr_0.7fr_0.9fr_1fr_auto] gap-3 items-end">
+                            <Field label={`Truck / Plate ${index + 1}`}>
+                              <select value={item.truck_id} onChange={e => setHaulingLineTruck(item.id, e.target.value)} className={inputClass}>
+                                <option value="">
+                                  {selectedHaulerTrucks.length === 0 ? 'No assigned hauler trucks' : 'Select truck...'}
+                                </option>
+                                {selectedHaulerTrucks.map(truck => (
+                                  <option key={truck.id} value={truck.id}>
+                                    {truck.plate_number}{truck.driver_name ? ` - ${truck.driver_name}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+                            <Field label="Driver">
+                              <input value={item.driver_name} readOnly className={`${inputClass} bg-slate-100 text-slate-500`} />
+                            </Field>
+                            <Field label="Trips">
+                              <input required type="number" min="0.01" step="0.01" value={item.trips} onChange={e => updateHaulingLineItem(item.id, { trips: e.target.value })} className={inputClass} />
+                            </Field>
+                            <Field label="Rate / Trip">
+                              <input required type="number" min="0.01" step="0.01" value={item.rate_per_trip} onChange={e => updateHaulingLineItem(item.id, { rate_per_trip: e.target.value })} className={inputClass} />
+                            </Field>
+                            <Field label="Amount">
+                              <div className="w-full px-3 py-2.5 rounded-lg border border-emerald-200 text-sm font-bold text-emerald-700 bg-emerald-50 tabular-nums">
+                                {currency(lineAmount)}
+                              </div>
+                            </Field>
+                            <button
+                              type="button"
+                              onClick={() => removeHaulingLineItem(item.id)}
+                              disabled={form.hauling_items.length === 1}
+                              className="h-10 w-10 rounded-lg border border-slate-200 text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30"
+                              title="Remove truck row"
+                            >
+                              <X size={16} className="mx-auto" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-xs font-semibold text-slate-500">Total Trips</p>
+                      <p className="text-sm font-bold text-slate-800 tabular-nums">{fmt(haulingLineTotals.trips).replace('.00', '')}</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-xs font-semibold text-slate-500">Trucks Used</p>
+                      <p className="text-sm font-bold text-slate-800 tabular-nums">{haulingLineTotals.truckCount}</p>
+                    </div>
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                      <p className="text-xs font-semibold text-emerald-700">Total Amount</p>
+                      <p className="text-sm font-bold text-emerald-700 tabular-nums">{currency(haulingServiceAmount)}</p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -828,7 +1089,7 @@ export default function HaulerOffsetLedger({
             </div>
 
             <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-              <button type="button" onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+              <button type="button" onClick={() => { setShowAddModal(false); setFormError(''); }} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50">Cancel</button>
               <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
                 {saving ? 'Saving...' : 'Save Transaction'}
               </button>
@@ -968,6 +1229,39 @@ function DetailBox({ label, value, positive = false, danger = false }: { label: 
 
 function TypeSpecificDetails({ entry, payload }: { entry: LedgerEntry; payload: Record<string, unknown> }) {
   if (entry.transaction_type === 'HAULING_SERVICE') {
+    const lineItems = Array.isArray(payload.line_items)
+      ? payload.line_items.map(item => asRecord(item as Json))
+      : [];
+
+    if (lineItems.length > 0) {
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs uppercase text-slate-500 border-b border-slate-200">
+                <th className="py-2 text-left">Truck / Plate</th>
+                <th className="py-2 text-left">Driver</th>
+                <th className="py-2 text-right">Trips</th>
+                <th className="py-2 text-right">Rate / Trip</th>
+                <th className="py-2 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {lineItems.map((item, index) => (
+                <tr key={`${textValue(item, 'truck_id')}-${index}`}>
+                  <td className="py-2 pr-3 text-slate-700 font-medium">{textValue(item, 'truck_plate') || '—'}</td>
+                  <td className="py-2 pr-3 text-slate-600">{textValue(item, 'driver_name') || '—'}</td>
+                  <td className="py-2 pr-3 text-right text-slate-700 tabular-nums">{fmt(numberValue(item, 'trips'))}</td>
+                  <td className="py-2 pr-3 text-right text-slate-700 tabular-nums">{currency(numberValue(item, 'rate_per_trip'))}</td>
+                  <td className="py-2 text-right text-emerald-700 font-bold tabular-nums">{currency(numberValue(item, 'amount'))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
     return (
       <DetailGrid rows={[
         ['Trips', textValue(payload, 'trip_count') || '—'],

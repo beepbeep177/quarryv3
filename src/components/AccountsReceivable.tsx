@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown, Download, FileText } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { TransactionWithRelations } from '../lib/database.types';
+import type { CustomerCreditEntry, TransactionWithRelations } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
@@ -18,6 +18,15 @@ function formatVolume(v: number) {
 
 function fmtDate(dateStr: string) {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function todayInput() {
+  const today = new Date();
+  return [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function htmlEscape(value: string | number) {
@@ -51,6 +60,9 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [settlingId, setSettlingId] = useState<string | null>(null);
+  const [customerCreditBalances, setCustomerCreditBalances] = useState<Record<string, number>>({});
+  const [actionError, setActionError] = useState('');
   const [page, setPage] = useState(1);
 
   useEffect(() => { fetchAR(); }, []);
@@ -58,21 +70,55 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
 
   async function fetchAR() {
     setLoading(true);
-    const { data } = await supabase
-      .from('transactions')
-      .select('*, customers(*), trucks(*)')
-      .in('payment_mode', ['P.O', 'OFFSET'])
-      .eq('status', 'PENDING')
-      .order('transaction_date', { ascending: true });
-    setRecords((data ?? []) as TransactionWithRelations[]);
+    setActionError('');
+    const [transactionsResult, creditResult] = await Promise.all([
+      supabase
+        .from('transactions')
+        .select('*, customers(*), trucks(*)')
+        .in('payment_mode', ['P.O', 'OFFSET'])
+        .eq('status', 'PENDING')
+        .order('transaction_date', { ascending: true }),
+      supabase
+        .from('customer_credit_entries')
+        .select('customer_id, debit_amount, credit_amount, status')
+        .eq('status', 'ACTIVE'),
+    ]);
+    setRecords((transactionsResult.data ?? []) as TransactionWithRelations[]);
+    const creditRows = (creditResult.data ?? []) as Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>[];
+    setCustomerCreditBalances(creditRows.reduce<Record<string, number>>((map, row) => {
+      map[row.customer_id] = (map[row.customer_id] ?? 0) + Number(row.credit_amount ?? 0) - Number(row.debit_amount ?? 0);
+      return map;
+    }, {}));
     setLoading(false);
   }
 
   async function markPaid(id: string) {
     setMarkingId(id);
-    await supabase.from('transactions').update({ status: 'PAID' }).eq('id', id);
-    setRecords(prev => prev.filter(r => r.id !== id));
+    setActionError('');
+    const { error } = await supabase.from('transactions').update({ status: 'PAID' }).eq('id', id);
+    if (error) {
+      setActionError(error.message);
+    } else {
+      setRecords(prev => prev.filter(r => r.id !== id));
+    }
     setMarkingId(null);
+  }
+
+  async function settleWithCredit(record: TransactionWithRelations) {
+    setSettlingId(record.id);
+    setActionError('');
+    const { error } = await supabase.rpc('settle_receivable_with_customer_credit', {
+      p_transaction_id: record.id,
+      p_settlement_date: todayInput(),
+      p_remarks: 'Settled from Accounts Receivable',
+    });
+
+    if (error) {
+      setActionError(error.message);
+    } else {
+      await fetchAR();
+    }
+    setSettlingId(null);
   }
 
   const filtered = records.filter(r => {
@@ -212,6 +258,12 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
 
       {!canEdit && <ReadOnlyNotice message="This user group can review outstanding balances only." />}
 
+      {actionError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {actionError}
+        </div>
+      )}
+
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
           <TrendingDown size={22} className="text-amber-600" />
@@ -273,21 +325,32 @@ export default function AccountsReceivable({ canEdit = false }: { canEdit?: bool
                     <td className="px-4 py-3 text-slate-700">{r.customers?.name ?? '—'}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-semibold">{formatVolume(r.volume_m3 ?? 0)}</td>
                     <td className="px-4 py-3 text-right tabular-nums font-bold text-slate-800">₱{fmt(r.total_amount)}</td>
-                    <td className="px-4 py-3 text-center">
-                      {r.payment_mode === 'P.O'
-                        ? <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>
-                        : <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>}
-                    </td>
+                      <td className="px-4 py-3 text-center">
+                        {r.payment_mode === 'P.O'
+                          ? <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>
+                          : <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>}
+                      </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => markPaid(r.id)}
-                          disabled={markingId === r.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors disabled:opacity-60"
-                        >
-                          {markingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                          Mark Paid
-                        </button>
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => settleWithCredit(r)}
+                            disabled={settlingId === r.id || markingId === r.id || (customerCreditBalances[r.customer_id] ?? 0) < (r.total_amount ?? 0)}
+                            title={(customerCreditBalances[r.customer_id] ?? 0) < (r.total_amount ?? 0) ? `Insufficient customer credit: PHP ${fmt(customerCreditBalances[r.customer_id] ?? 0)}` : 'Settle using customer credit'}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-500 hover:bg-teal-600 text-white text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {settlingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                            Use Credit
+                          </button>
+                          <button
+                            onClick={() => markPaid(r.id)}
+                            disabled={markingId === r.id || settlingId === r.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors disabled:opacity-60"
+                          >
+                            {markingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                            Mark Paid
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>

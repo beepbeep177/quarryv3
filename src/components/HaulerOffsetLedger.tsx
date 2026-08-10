@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Banknote,
+  CheckCircle,
   Download,
   Eye,
   FileText,
@@ -11,10 +12,11 @@ import {
   Scale,
   Search,
   Truck,
+  Users,
   X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Customer, HaulerOffsetLedgerRow, Json, Truck as TruckType } from '../lib/database.types';
+import type { Customer, CustomerCreditLedgerRow, HaulerOffsetLedgerRow, Json, TransactionWithRelations, Truck as TruckType } from '../lib/database.types';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
@@ -23,9 +25,13 @@ const PAGE_SIZE = 10;
 
 type HaulerTruck = TruckType & { customers?: Customer | null };
 type LedgerEntry = HaulerOffsetLedgerRow & { row_kind: 'ENTRY' };
+type CustomerCreditLedgerEntry = CustomerCreditLedgerRow & { row_kind: 'ENTRY' };
 type ManualType = 'HAULING_SERVICE' | 'CASH_PAYMENT' | 'OPENING_BALANCE' | 'ADJUSTMENT';
+type CustomerCreditManualType = 'ADVANCE_PAYMENT' | 'OPENING_BALANCE' | 'ADJUSTMENT';
 type EntrySide = 'DEBIT' | 'CREDIT';
 type QuickFilter = 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_QUARTER' | 'CUSTOM';
+type OffsetLedgerTab = 'HAULER' | 'CUSTOMER';
+type CustomerStatusFilter = 'ALL' | 'PENDING' | 'PAID';
 
 interface HaulingLineItem {
   id: string;
@@ -65,12 +71,44 @@ interface EntryForm {
   reason: string;
 }
 
+interface CustomerCreditForm {
+  transaction_type: CustomerCreditManualType;
+  transaction_date: string;
+  reference_no: string;
+  description: string;
+  amount: string;
+  entry_side: EntrySide;
+  remarks: string;
+}
+
+type CustomerOffsetRow = TransactionWithRelations & {
+  offset_amount: number;
+  running_total: number;
+};
+
+function normalizeCustomerName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function customerSelectLabel(customer: Customer, duplicateCount: number, activityCount: number) {
+  const details = [
+    activityCount > 0 ? `${activityCount} offset${activityCount === 1 ? '' : 's'}` : '',
+    duplicateCount > 1 ? `id ${customer.id.slice(0, 8)}` : '',
+  ].filter(Boolean);
+
+  return details.length > 0 ? `${customer.name} (${details.join(', ')})` : customer.name;
+}
+
 function todayInput() {
-  return new Date().toISOString().split('T')[0];
+  return toInputDate(new Date());
 }
 
 function toInputDate(date: Date) {
-  return date.toISOString().split('T')[0];
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function monthRange(offset = 0) {
@@ -157,6 +195,45 @@ function numberValue(payload: Record<string, unknown>, key: string) {
   return 0;
 }
 
+function getSplitOffsetAmount(details: Json): number {
+  if (!Array.isArray(details)) return 0;
+  return details.reduce<number>((sum, item) => {
+    const row = asRecord(item);
+    const mode = textValue(row, 'mode').toUpperCase();
+    const amount = numberValue(row, 'amount');
+    return mode === 'OFFSET' ? sum + amount : sum;
+  }, 0);
+}
+
+function getCustomerOffsetAmount(tx: TransactionWithRelations): number {
+  if (tx.payment_mode === 'P.O') return tx.total_amount ?? 0;
+  if (tx.payment_mode === 'OFFSET') return tx.total_amount ?? 0;
+  if (tx.payment_mode === 'SPLIT') return getSplitOffsetAmount(tx.split_payment_details);
+  return 0;
+}
+
+function customerCreditTypeLabel(type: CustomerCreditLedgerRow['transaction_type']) {
+  switch (type) {
+    case 'ADVANCE_PAYMENT': return 'Advance Payment';
+    case 'PURCHASE_DEDUCTION': return 'Purchase Deduction';
+    case 'OPENING_BALANCE': return 'Opening Balance';
+    case 'ADJUSTMENT': return 'Adjustment';
+    case 'REVERSAL': return 'Reversal';
+    default: return 'Summary';
+  }
+}
+
+function customerCreditTypeBadgeClass(type: CustomerCreditLedgerRow['transaction_type']) {
+  switch (type) {
+    case 'ADVANCE_PAYMENT': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'PURCHASE_DEDUCTION': return 'bg-teal-50 text-teal-700 border-teal-200';
+    case 'OPENING_BALANCE': return 'bg-slate-50 text-slate-700 border-slate-200';
+    case 'ADJUSTMENT': return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'REVERSAL': return 'bg-red-50 text-red-700 border-red-200';
+    default: return 'bg-slate-50 text-slate-600 border-slate-200';
+  }
+}
+
 function typeLabel(type: HaulerOffsetLedgerRow['transaction_type']) {
   switch (type) {
     case 'HAULING_SERVICE': return 'Hauling Service';
@@ -223,28 +300,66 @@ export default function HaulerOffsetLedger({
   canExportStatement = false,
 }: HaulerOffsetLedgerProps) {
   const initialRange = monthRange();
+  const [activeLedgerTab, setActiveLedgerTab] = useState<OffsetLedgerTab>('HAULER');
   const [haulers, setHaulers] = useState<Customer[]>([]);
   const [haulerTrucks, setHaulerTrucks] = useState<HaulerTruck[]>([]);
   const [haulerId, setHaulerId] = useState('');
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerActivityCounts, setCustomerActivityCounts] = useState<Record<string, number>>({});
+  const [customerId, setCustomerId] = useState<'ALL' | string>('ALL');
+  const [customerTransactions, setCustomerTransactions] = useState<TransactionWithRelations[]>([]);
+  const [customerCreditRows, setCustomerCreditRows] = useState<CustomerCreditLedgerRow[]>([]);
+  const [customerAvailableCredit, setCustomerAvailableCredit] = useState(0);
   const [dateFrom, setDateFrom] = useState(initialRange.start);
   const [dateTo, setDateTo] = useState(initialRange.end);
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('THIS_MONTH');
   const [search, setSearch] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerStatusFilter, setCustomerStatusFilter] = useState<CustomerStatusFilter>('ALL');
   const [ledgerRows, setLedgerRows] = useState<HaulerOffsetLedgerRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [customerLoading, setCustomerLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [customerError, setCustomerError] = useState('');
   const [formError, setFormError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+  const [settlingTransactionId, setSettlingTransactionId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [customerPage, setCustomerPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showCustomerCreditModal, setShowCustomerCreditModal] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
   const [form, setForm] = useState<EntryForm>(() => emptyForm(canAdd ? 'HAULING_SERVICE' : 'OPENING_BALANCE'));
+  const [customerCreditForm, setCustomerCreditForm] = useState<CustomerCreditForm>(() => emptyCustomerCreditForm(canAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
 
   const canManualAdd = canAdd || canAdjust;
   const summary = ledgerRows.find(row => row.row_kind === 'SUMMARY');
   const selectedHauler = haulers.find(hauler => hauler.id === haulerId) ?? null;
+  const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
+  const customerNameCounts = useMemo(() => customers.reduce<Record<string, number>>((counts, customer) => {
+    const key = normalizeCustomerName(customer.name);
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {}), [customers]);
+  const customerOptions = useMemo(
+    () => [...customers].sort((a, b) => {
+      const nameCompare = a.name.localeCompare(b.name);
+      if (nameCompare !== 0) return nameCompare;
+      return (customerActivityCounts[b.id] ?? 0) - (customerActivityCounts[a.id] ?? 0) || a.id.localeCompare(b.id);
+    }),
+    [customers, customerActivityCounts],
+  );
+  const matchingCustomerWithActivity = useMemo(() => {
+    if (!selectedCustomer || (customerActivityCounts[selectedCustomer.id] ?? 0) > 0) return null;
+    const selectedName = normalizeCustomerName(selectedCustomer.name);
+    return customerOptions.find(customer =>
+      customer.id !== selectedCustomer.id &&
+      normalizeCustomerName(customer.name) === selectedName &&
+      (customerActivityCounts[customer.id] ?? 0) > 0
+    ) ?? null;
+  }, [selectedCustomer, customerOptions, customerActivityCounts]);
   const selectedHaulerTrucks = useMemo(
     () => haulerTrucks.filter(truck => truck.customer_id === haulerId),
     [haulerId, haulerTrucks],
@@ -266,6 +381,50 @@ export default function HaulerOffsetLedger({
 
   const currentPage = Math.min(page, Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE)));
   const pagedEntries = useMemo(() => paginate(filteredEntries, currentPage, PAGE_SIZE), [currentPage, filteredEntries]);
+
+  const customerOffsetRows = useMemo<CustomerOffsetRow[]>(() => {
+    let runningTotal = 0;
+    return customerTransactions
+      .map(tx => ({ tx, offsetAmount: getCustomerOffsetAmount(tx) }))
+      .filter(({ offsetAmount }) => offsetAmount > 0)
+      .sort((a, b) => a.tx.transaction_date.localeCompare(b.tx.transaction_date) || a.tx.created_at.localeCompare(b.tx.created_at))
+      .map(({ tx, offsetAmount }) => {
+        runningTotal += offsetAmount;
+        return {
+          ...tx,
+          offset_amount: offsetAmount,
+          running_total: runningTotal,
+        };
+      })
+      .sort((a, b) => b.transaction_date.localeCompare(a.transaction_date) || b.created_at.localeCompare(a.created_at));
+  }, [customerTransactions]);
+
+  const filteredCustomerRows = useMemo(() => {
+    const q = customerSearch.trim().toLowerCase();
+    return customerOffsetRows.filter(row =>
+      (customerStatusFilter === 'ALL' || row.status === customerStatusFilter) &&
+      (!q ||
+      (row.customers?.name ?? '').toLowerCase().includes(q) ||
+      (row.trucks?.plate_number ?? '').toLowerCase().includes(q) ||
+      row.dr_number.toLowerCase().includes(q) ||
+      row.material_type.toLowerCase().includes(q))
+    );
+  }, [customerOffsetRows, customerSearch, customerStatusFilter]);
+
+  const customerCurrentPage = Math.min(customerPage, Math.max(1, Math.ceil(filteredCustomerRows.length / PAGE_SIZE)));
+  const pagedCustomerRows = useMemo(() => paginate(filteredCustomerRows, customerCurrentPage, PAGE_SIZE), [customerCurrentPage, filteredCustomerRows]);
+  const customerOffsetTotal = useMemo(() => customerOffsetRows.reduce((sum, row) => sum + row.offset_amount, 0), [customerOffsetRows]);
+  const customerTransactionTotal = useMemo(() => customerOffsetRows.reduce((sum, row) => sum + (row.total_amount ?? 0), 0), [customerOffsetRows]);
+  const customerVolumeTotal = useMemo(() => customerOffsetRows.reduce((sum, row) => sum + (row.volume_m3 ?? 0), 0), [customerOffsetRows]);
+  const customerCreditSummary = customerCreditRows.find(row => row.row_kind === 'SUMMARY') ?? null;
+  const customerCreditEntries = useMemo(
+    () => customerCreditRows.filter((row): row is CustomerCreditLedgerEntry => row.row_kind === 'ENTRY'),
+    [customerCreditRows],
+  );
+  const customerCreditClosingBalance = customerCreditSummary?.closing_balance ?? 0;
+  const customerCreditAdvances = customerCreditSummary?.advances ?? 0;
+  const customerCreditPurchases = customerCreditSummary?.purchases ?? 0;
+  const customerCreditAdjustmentsNet = (customerCreditSummary?.adjustments_credit ?? 0) - (customerCreditSummary?.adjustments_debit ?? 0);
 
   const openingBalance = summary?.opening_balance ?? 0;
   const haulingEarnings = summary?.hauling_earnings ?? 0;
@@ -296,6 +455,7 @@ export default function HaulerOffsetLedger({
 
   useEffect(() => {
     fetchHaulers();
+    fetchCustomers();
   }, []);
 
   useEffect(() => {
@@ -303,8 +463,16 @@ export default function HaulerOffsetLedger({
   }, [haulerId, dateFrom, dateTo]);
 
   useEffect(() => {
+    if (activeLedgerTab === 'CUSTOMER') fetchCustomerOffsets();
+  }, [activeLedgerTab, customerId, dateFrom, dateTo]);
+
+  useEffect(() => {
     setPage(1);
   }, [haulerId, dateFrom, dateTo, search]);
+
+  useEffect(() => {
+    setCustomerPage(1);
+  }, [customerId, dateFrom, dateTo, customerSearch, customerStatusFilter]);
 
   async function fetchHaulers() {
     setLoading(true);
@@ -339,6 +507,35 @@ export default function HaulerOffsetLedger({
     }
   }
 
+  async function fetchCustomers() {
+    const [{ data, error: customersError }, { data: offsetRows, error: offsetsError }] = await Promise.all([
+      supabase
+        .from('customers')
+        .select('*')
+        .order('name', { ascending: true }),
+      supabase
+        .from('transactions')
+        .select('customer_id')
+        .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
+        .not('customer_id', 'is', null),
+    ]);
+
+    if (customersError) {
+      setCustomerError(customersError.message);
+      return;
+    }
+    if (offsetsError) {
+      setCustomerError(offsetsError.message);
+    }
+
+    setCustomers((data ?? []) as Customer[]);
+    const counts = ((offsetRows ?? []) as Array<{ customer_id: string | null }>).reduce<Record<string, number>>((nextCounts, row) => {
+      if (row.customer_id) nextCounts[row.customer_id] = (nextCounts[row.customer_id] ?? 0) + 1;
+      return nextCounts;
+    }, {});
+    setCustomerActivityCounts(counts);
+  }
+
   async function fetchLedger(nextRange?: { haulerId?: string; dateFrom?: string; dateTo?: string }) {
     const targetHaulerId = nextRange?.haulerId ?? haulerId;
     const targetDateFrom = nextRange?.dateFrom ?? dateFrom;
@@ -360,6 +557,67 @@ export default function HaulerOffsetLedger({
       setLedgerRows((data ?? []) as HaulerOffsetLedgerRow[]);
     }
     setLoading(false);
+  }
+
+  async function fetchCustomerOffsets(nextRange?: { customerId?: 'ALL' | string; dateFrom?: string; dateTo?: string }) {
+    const targetCustomerId = nextRange?.customerId ?? customerId;
+    const targetDateFrom = nextRange?.dateFrom ?? dateFrom;
+    const targetDateTo = nextRange?.dateTo ?? dateTo;
+    setCustomerLoading(true);
+    setCustomerError('');
+
+    let query = supabase
+      .from('transactions')
+      .select('*, customers(*), trucks(*)')
+      .gte('transaction_date', targetDateFrom)
+      .lte('transaction_date', targetDateTo)
+      .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
+      .order('transaction_date', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (targetCustomerId !== 'ALL') {
+      query = query.eq('customer_id', targetCustomerId);
+    }
+
+    const creditPromise = targetCustomerId === 'ALL'
+      ? Promise.resolve({ data: [] as CustomerCreditLedgerRow[], error: null })
+      : supabase.rpc('get_customer_credit_ledger', {
+          p_customer_id: targetCustomerId,
+          p_date_from: targetDateFrom,
+          p_date_to: targetDateTo,
+        });
+    const balancePromise = targetCustomerId === 'ALL'
+      ? Promise.resolve({ data: 0, error: null })
+      : supabase.rpc('get_customer_credit_balance', {
+          p_customer_id: targetCustomerId,
+          p_exclude_source_table: null,
+          p_exclude_source_id: null,
+        });
+
+    const [
+      { data, error: transactionsError },
+      { data: creditData, error: creditError },
+      { data: balanceData, error: balanceError },
+    ] = await Promise.all([query, creditPromise, balancePromise]);
+    if (transactionsError) {
+      setCustomerError(transactionsError.message);
+      setCustomerTransactions([]);
+    } else {
+      setCustomerTransactions((data ?? []) as TransactionWithRelations[]);
+    }
+    if (creditError) {
+      setCustomerError(current => current || creditError.message);
+      setCustomerCreditRows([]);
+    } else {
+      setCustomerCreditRows((creditData ?? []) as CustomerCreditLedgerRow[]);
+    }
+    if (balanceError) {
+      setCustomerError(current => current || balanceError.message);
+      setCustomerAvailableCredit(0);
+    } else {
+      setCustomerAvailableCredit(Number(balanceData ?? 0));
+    }
+    setCustomerLoading(false);
   }
 
   function applyQuickFilter(filter: QuickFilter) {
@@ -407,8 +665,21 @@ export default function HaulerOffsetLedger({
     setShowAddModal(true);
   }
 
+  function openCustomerCreditModal() {
+    if (customerId === 'ALL' || !canManualAdd) return;
+    setCustomerCreditForm(emptyCustomerCreditForm(canAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
+    setFormError('');
+    setSuccessMessage('');
+    setShowCustomerCreditModal(true);
+  }
+
   function setFormValue<K extends keyof EntryForm>(key: K, value: EntryForm[K]) {
     setForm(current => ({ ...current, [key]: value }));
+    setFormError('');
+  }
+
+  function setCustomerCreditFormValue<K extends keyof CustomerCreditForm>(key: K, value: CustomerCreditForm[K]) {
+    setCustomerCreditForm(current => ({ ...current, [key]: value }));
     setFormError('');
   }
 
@@ -566,6 +837,81 @@ export default function HaulerOffsetLedger({
     await fetchLedger({ dateFrom: nextDateFrom, dateTo: nextDateTo });
   }
 
+  async function saveCustomerCreditEntry(event: React.FormEvent) {
+    event.preventDefault();
+    if (customerId === 'ALL' || !canManualAdd) return;
+
+    const amount = Number(customerCreditForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setFormError('Amount must be greater than zero.');
+      return;
+    }
+
+    setSaving(true);
+    setCustomerError('');
+    setFormError('');
+    const { data: savedEntry, error: rpcError } = await supabase.rpc('create_customer_credit_entry', {
+      p_customer_id: customerId,
+      p_transaction_date: customerCreditForm.transaction_date,
+      p_transaction_type: customerCreditForm.transaction_type,
+      p_reference_no: customerCreditForm.reference_no.trim(),
+      p_description: customerCreditForm.description.trim(),
+      p_amount: amount,
+      p_entry_side: customerCreditForm.transaction_type === 'OPENING_BALANCE' || customerCreditForm.transaction_type === 'ADJUSTMENT'
+        ? customerCreditForm.entry_side
+        : null,
+      p_remarks: customerCreditForm.remarks.trim(),
+      p_details: {} as Json,
+    });
+    setSaving(false);
+
+    if (rpcError) {
+      setFormError(rpcError.message);
+      return;
+    }
+
+    setShowCustomerCreditModal(false);
+    setSuccessMessage('Customer credit entry saved successfully.');
+    const savedDate = customerCreditForm.transaction_date || todayInput();
+    const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
+    const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
+    if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
+      setQuickFilter('CUSTOM');
+      setDateFrom(nextDateFrom);
+      setDateTo(nextDateTo);
+    }
+    window.setTimeout(() => setSuccessMessage(''), 3500);
+    await fetchCustomerOffsets({ dateFrom: nextDateFrom, dateTo: nextDateTo });
+
+    const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
+    setHighlightedSourceId(savedSourceId);
+    window.setTimeout(() => setHighlightedSourceId(null), 3500);
+  }
+
+  async function settleCustomerReceivable(row: CustomerOffsetRow) {
+    if (!canAdjust || row.status !== 'PENDING' || row.payment_mode === 'SPLIT') return;
+
+    setSettlingTransactionId(row.id);
+    setCustomerError('');
+    const { data, error: settleError } = await supabase.rpc('settle_receivable_with_customer_credit', {
+      p_transaction_id: row.id,
+      p_settlement_date: todayInput(),
+      p_remarks: 'Settled from Customer Ledger',
+    });
+
+    if (settleError) {
+      setCustomerError(settleError.message);
+    } else {
+      setSuccessMessage('Receivable settled using customer credit.');
+      window.setTimeout(() => setSuccessMessage(''), 3500);
+      await fetchCustomerOffsets();
+      const settlementId = typeof data === 'object' && data && 'id' in data ? String(data.id) : null;
+      setHighlightedSourceId(settlementId);
+      window.setTimeout(() => setHighlightedSourceId(null), 3500);
+    }
+    setSettlingTransactionId(null);
+  }
+
   async function voidManualEntry(entry: LedgerEntry) {
     if (!canAdjust || entry.source_module !== 'hauler_offset_entries' || !entry.source_id) return;
     const reason = prompt('Void reason?');
@@ -617,6 +963,62 @@ export default function HaulerOffsetLedger({
     ];
     const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
     downloadTextFile(`hauler-offset-ledger-${slugify(selectedHauler?.name ?? 'hauler')}-${dateFrom}-${dateTo}.csv`, csv, 'text/csv;charset=utf-8');
+  }
+
+  function exportCustomerExcel() {
+    if (!canExport || filteredCustomerRows.length === 0) {
+      alert('No customer offset rows to export.');
+      return;
+    }
+
+    const customerLabel = selectedCustomer?.name ?? 'All Customers';
+    const lines = [
+      ['Customer Receivable Ledger'],
+      [`Customer: ${customerLabel}`],
+      [`Period: ${formatDate(dateFrom)} to ${formatDate(dateTo)}`],
+      [`Generated: ${new Date().toLocaleString('en-PH')}`],
+      [],
+      ['Date', 'DR #', 'Customer', 'Truck', 'Material', 'Payment Mode', 'Status', 'Receivable Amount', 'Transaction Total', 'Running Total'],
+      ...filteredCustomerRows.map(row => [
+        formatDate(row.transaction_date),
+        row.dr_number,
+        row.customers?.name ?? '',
+        row.trucks?.plate_number ?? '',
+        row.material_type,
+        row.payment_mode,
+        row.status,
+        fmt(row.offset_amount),
+        fmt(row.total_amount ?? 0),
+        fmt(row.running_total),
+      ]),
+      [],
+      ['Total Receivable', '', '', '', '', '', '', fmt(customerOffsetTotal), '', ''],
+      ...(selectedCustomer ? [
+        [],
+        ['Customer Credit Ledger'],
+        ['Opening Balance', '', '', '', '', '', fmt(customerCreditSummary?.opening_balance ?? 0), '', '', ''],
+        ['Advances', '', '', '', '', '', fmt(customerCreditAdvances), '', '', ''],
+        ['Purchases Used', '', '', '', '', '', fmt(customerCreditPurchases), '', '', ''],
+        ['Adjustments Net', '', '', '', '', '', fmt(customerCreditAdjustmentsNet), '', '', ''],
+        ['Closing Balance', '', '', '', '', '', fmt(customerCreditClosingBalance), '', '', ''],
+        [],
+        ['Date', 'Type', 'Reference', 'Description', 'Debit', 'Credit', 'Running Balance', '', '', ''],
+        ...customerCreditEntries.map(row => [
+          formatDate(row.transaction_date),
+          customerCreditTypeLabel(row.transaction_type),
+          row.reference_no,
+          row.description,
+          row.debit_amount ? fmt(row.debit_amount) : '',
+          row.credit_amount ? fmt(row.credit_amount) : '',
+          fmt(row.running_balance),
+          '',
+          '',
+          '',
+        ]),
+      ] : []),
+    ];
+    const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
+    downloadTextFile(`customer-offset-ledger-${slugify(customerLabel)}-${dateFrom}-${dateTo}.csv`, csv, 'text/csv;charset=utf-8');
   }
 
   function printStatement() {
@@ -728,6 +1130,15 @@ export default function HaulerOffsetLedger({
       { value: 'ADJUSTMENT' as const, label: 'Adjustment' },
     ] : []),
   ];
+  const customerCreditTypeOptions = [
+    ...(canAdd ? [
+      { value: 'ADVANCE_PAYMENT' as const, label: 'Advance Payment' },
+    ] : []),
+    ...(canAdjust ? [
+      { value: 'OPENING_BALANCE' as const, label: 'Opening Balance' },
+      { value: 'ADJUSTMENT' as const, label: 'Adjustment' },
+    ] : []),
+  ];
 
   return (
     <div className="space-y-5">
@@ -738,39 +1149,77 @@ export default function HaulerOffsetLedger({
               <ReceiptText size={22} />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-800">Hauler Offset Ledger</h1>
-              <p className="text-slate-500 text-sm mt-0.5">Track hauling earnings, product offsets, diesel offsets, and payments.</p>
+              <h1 className="text-2xl font-bold text-slate-800">Offset Ledger</h1>
+              <p className="text-slate-500 text-sm mt-0.5">Track hauler balances separately from customer offset activity.</p>
             </div>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {canExport && (
-            <button onClick={exportExcel} disabled={loading || filteredEntries.length === 0} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 text-sm font-semibold">
+            <button
+              onClick={activeLedgerTab === 'HAULER' ? exportExcel : exportCustomerExcel}
+              disabled={activeLedgerTab === 'HAULER' ? loading || filteredEntries.length === 0 : customerLoading || filteredCustomerRows.length === 0}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 text-sm font-semibold"
+            >
               <Download size={15} /> Export Excel
             </button>
           )}
-          {canExportStatement && (
+          {activeLedgerTab === 'HAULER' && canExportStatement && (
             <button onClick={printStatement} disabled={loading || !summary} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold">
               <FileText size={15} /> Export PDF
             </button>
           )}
-          <button onClick={() => fetchLedger()} disabled={loading || !haulerId} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-60">
-            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          <button
+            onClick={() => activeLedgerTab === 'HAULER' ? fetchLedger() : fetchCustomerOffsets()}
+            disabled={activeLedgerTab === 'HAULER' ? loading || !haulerId : customerLoading}
+            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+          >
+            <RefreshCw size={15} className={activeLedgerTab === 'HAULER' ? loading ? 'animate-spin' : '' : customerLoading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
-      {!canManualAdd && !canExport && <ReadOnlyNotice message="This user group can review hauler offset balances only." />}
+      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveLedgerTab('HAULER')}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeLedgerTab === 'HAULER' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'}`}
+        >
+          <Truck size={15} /> Hauler Ledger
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveLedgerTab('CUSTOMER')}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeLedgerTab === 'CUSTOMER' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'}`}
+        >
+          <Users size={15} /> Customer Ledger
+        </button>
+      </div>
+
+      {activeLedgerTab === 'HAULER' && !canManualAdd && !canExport && <ReadOnlyNotice message="This user group can review hauler offset balances only." />}
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-          <Field label="Hauler">
-            <select value={haulerId} onChange={e => handleHaulerChange(e.target.value)} className={inputClass}>
-              <option value="">Select hauler...</option>
-              {haulers.map(hauler => <option key={hauler.id} value={hauler.id}>{hauler.name}</option>)}
-            </select>
-          </Field>
+          {activeLedgerTab === 'HAULER' ? (
+            <Field label="Hauler">
+              <select value={haulerId} onChange={e => handleHaulerChange(e.target.value)} className={inputClass}>
+                <option value="">Select hauler...</option>
+                {haulers.map(hauler => <option key={hauler.id} value={hauler.id}>{hauler.name}</option>)}
+              </select>
+            </Field>
+          ) : (
+            <Field label="Customer">
+              <select value={customerId} onChange={e => setCustomerId(e.target.value as 'ALL' | string)} className={inputClass}>
+                <option value="ALL">All customers</option>
+                {customerOptions.map(customer => (
+                  <option key={customer.id} value={customer.id}>
+                    {customerSelectLabel(customer, customerNameCounts[normalizeCustomerName(customer.name)] ?? 1, customerActivityCounts[customer.id] ?? 0)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label="Date From">
             <input type="date" value={dateFrom} onChange={e => updateDateFrom(e.target.value)} className={inputClass} />
           </Field>
@@ -786,13 +1235,32 @@ export default function HaulerOffsetLedger({
             </select>
           </Field>
           <div className="flex items-end">
-            {canManualAdd && (
+            {activeLedgerTab === 'HAULER' && canManualAdd && (
               <button onClick={openAddModal} disabled={!haulerId} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
                 <Plus size={16} /> Add Transaction
               </button>
             )}
+            {activeLedgerTab === 'CUSTOMER' && canManualAdd && (
+              <button onClick={openCustomerCreditModal} disabled={customerId === 'ALL'} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
+                <Plus size={16} /> Add Credit
+              </button>
+            )}
           </div>
         </div>
+        {activeLedgerTab === 'CUSTOMER' && selectedCustomer && matchingCustomerWithActivity && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <span>
+              Heads up: this {selectedCustomer.name} record has no offset rows, but another {selectedCustomer.name} record has {customerActivityCounts[matchingCustomerWithActivity.id] ?? 0} offset rows.
+            </span>
+            <button
+              type="button"
+              onClick={() => setCustomerId(matchingCustomerWithActivity.id)}
+              className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-900 text-xs font-semibold hover:bg-amber-200"
+            >
+              Use matching record
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -807,7 +1275,7 @@ export default function HaulerOffsetLedger({
         </div>
       )}
 
-      {loading ? (
+      {activeLedgerTab === 'HAULER' && (loading ? (
         <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2 bg-white rounded-xl border border-slate-200">
           <Loader2 size={18} className="animate-spin" /> Loading hauler ledger...
         </div>
@@ -929,6 +1397,232 @@ export default function HaulerOffsetLedger({
               </div>
             )}
           </div>
+        </>
+      ))}
+
+      {activeLedgerTab === 'CUSTOMER' && (
+        <>
+          {customerError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
+              {customerError}
+            </div>
+          )}
+
+          {customerLoading ? (
+            <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2 bg-white rounded-xl border border-slate-200">
+              <Loader2 size={18} className="animate-spin" /> Loading customer offsets...
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                <div className="bg-white rounded-xl border border-slate-200 p-5">
+                  <div className="w-11 h-11 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
+                    <ReceiptText size={21} className="text-emerald-500" />
+                  </div>
+                  <p className="text-sm text-slate-500 font-medium">Offset Transactions</p>
+                  <p className="text-2xl font-bold text-slate-800 mt-1 tabular-nums">{customerOffsetRows.length}</p>
+                  <p className="text-xs text-slate-400 mt-1">Records this period</p>
+                </div>
+                <SummaryCard label="Receivable Amount" value={customerOffsetTotal} sub="P.O and offset amount this period" icon={<Scale size={21} className="text-orange-500" />} bg="bg-orange-50" />
+                <SummaryCard label="Sales Value" value={customerTransactionTotal} sub="Total value of receivable rows" icon={<Banknote size={21} className="text-blue-500" />} bg="bg-blue-50" />
+                <SummaryCard label="Available Credit" value={customerAvailableCredit} sub={selectedCustomer ? 'Current customer balance' : 'Select one customer'} icon={<Banknote size={21} className="text-teal-500" />} bg="bg-teal-50" />
+                <div className="rounded-xl border border-sky-100 bg-sky-50 p-5">
+                  <div className="w-11 h-11 rounded-xl bg-white/70 flex items-center justify-center mb-4">
+                    <Users size={21} className="text-sky-600" />
+                  </div>
+                  <p className="text-sm text-slate-500 font-medium">Customer Scope</p>
+                  <p className="text-lg font-bold text-slate-800 mt-1 truncate" title={selectedCustomer?.name ?? 'All customers'}>{selectedCustomer?.name ?? 'All customers'}</p>
+                  <p className="text-xs text-slate-400 mt-1">{formatDate(dateFrom)} to {formatDate(dateTo)}</p>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-500 bg-sky-50/70 border border-sky-100 rounded-xl px-4 py-3">
+                Customer Ledger separates receivable activity from customer advance credits. Pending P.O/OFFSET rows can be settled using Customer Credit only when the selected customer has enough available balance.
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                <div className="xl:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold text-slate-800">Customer Receivable Activity</h2>
+                      <p className="text-xs text-slate-500 mt-1">Showing P.O, offset, and paid receivable transactions for the selected customer scope.</p>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+                      <select value={customerStatusFilter} onChange={e => setCustomerStatusFilter(e.target.value as CustomerStatusFilter)} className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                        <option value="ALL">All Status</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="PAID">Paid</option>
+                      </select>
+                      <div className="relative w-full md:w-72">
+                        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input value={customerSearch} onChange={e => setCustomerSearch(e.target.value)} placeholder="Search customer, DR, truck, material..." className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {filteredCustomerRows.length === 0 ? (
+                    <div className="py-16 text-center">
+                      <ReceiptText size={32} className="text-slate-300 mx-auto mb-3" />
+                      <p className="text-slate-500 text-sm">No customer receivable activity for this range</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                            <th className="px-4 py-3 text-left">Date</th>
+                            <th className="px-4 py-3 text-left">DR #</th>
+                            <th className="px-4 py-3 text-left">Customer</th>
+                            <th className="px-4 py-3 text-left">Truck</th>
+                            <th className="px-4 py-3 text-left">Material</th>
+                            <th className="px-4 py-3 text-center">Mode</th>
+                            <th className="px-4 py-3 text-center">Status</th>
+                            <th className="px-4 py-3 text-right">Amount</th>
+                            <th className="px-4 py-3 text-right">Running Total</th>
+                            {canAdjust && <th className="px-4 py-3 text-center">Action</th>}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {pagedCustomerRows.map(row => (
+                            <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.transaction_date)}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-500">{row.dr_number || '—'}</td>
+                              <td className="px-4 py-3 text-slate-700 font-medium">{row.customers?.name ?? '—'}</td>
+                              <td className="px-4 py-3 text-slate-600">{row.trucks?.plate_number ?? '—'}</td>
+                              <td className="px-4 py-3 text-slate-600">{row.material_type || '—'}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${row.payment_mode === 'P.O' ? 'bg-amber-100 text-amber-700' : row.payment_mode === 'SPLIT' ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-600'}`}>
+                                  {row.payment_mode === 'SPLIT' ? 'SPLIT' : row.payment_mode}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-flex px-2.5 py-0.5 rounded-full border text-xs font-semibold ${row.status === 'PAID' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                  {row.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right text-orange-600 font-semibold tabular-nums">{currency(row.offset_amount)}</td>
+                              <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(row.running_total)}</td>
+                              {canAdjust && (
+                                <td className="px-4 py-3 text-center">
+                                  {row.status === 'PENDING' && row.payment_mode !== 'SPLIT' ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => settleCustomerReceivable(row)}
+                                      disabled={settlingTransactionId === row.id || customerAvailableCredit + 0.005 < row.offset_amount}
+                                      title={customerAvailableCredit + 0.005 < row.offset_amount ? `Insufficient credit: ${currency(customerAvailableCredit)}` : 'Settle using customer credit'}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-500 text-white text-xs font-semibold hover:bg-teal-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                      {settlingTransactionId === row.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                                      Use Credit
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-slate-400">—</span>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <Pagination page={customerCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredCustomerRows.length} onPageChange={setCustomerPage} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
+                  <h2 className="font-semibold text-slate-800">Customer Receivable Summary</h2>
+                  <p className="text-xs text-slate-500 mt-1">{formatDate(dateFrom)} to {formatDate(dateTo)}</p>
+                  <div className="mt-4 space-y-2 text-sm">
+                    <SummaryLine label="Receivable Records" value={String(customerOffsetRows.length)} />
+                    <SummaryLine label="Total Receivable Amount" value={currency(customerOffsetTotal)} positive />
+                    <SummaryLine label="Related Sales Value" value={currency(customerTransactionTotal)} positive />
+                    <SummaryLine label="Total Volume (m³)" value={fmt(customerVolumeTotal)} />
+                  </div>
+                  <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-500">
+                    Receivable activity uses posted daily transactions with P.O, OFFSET, or SPLIT payment mode.
+                  </div>
+                </div>
+              </div>
+
+              {selectedCustomer ? (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold text-slate-800">Customer Credit Ledger</h2>
+                      <p className="text-xs text-slate-500 mt-1">Advance credits, deductions from Daily Transactions, and manual adjustments.</p>
+                    </div>
+                    <div className="text-right text-sm">
+                      <p className="text-xs text-slate-500">Closing Balance</p>
+                      <p className={`font-bold tabular-nums ${customerCreditClosingBalance > 0 ? 'text-emerald-700' : 'text-slate-800'}`}>{currency(customerCreditClosingBalance)}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-0 border-b border-slate-100">
+                    <div className="p-4 border-b md:border-b-0 md:border-r border-slate-100">
+                      <p className="text-xs text-slate-500">Opening Balance</p>
+                      <p className="text-lg font-bold text-slate-800 tabular-nums">{currency(customerCreditSummary?.opening_balance ?? 0)}</p>
+                    </div>
+                    <div className="p-4 border-b md:border-b-0 md:border-r border-slate-100">
+                      <p className="text-xs text-slate-500">Advances</p>
+                      <p className="text-lg font-bold text-emerald-700 tabular-nums">{currency(customerCreditAdvances)}</p>
+                    </div>
+                    <div className="p-4 border-b md:border-b-0 md:border-r border-slate-100">
+                      <p className="text-xs text-slate-500">Purchases Used</p>
+                      <p className="text-lg font-bold text-teal-700 tabular-nums">{currency(customerCreditPurchases)}</p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-xs text-slate-500">Adjustments Net</p>
+                      <p className={`text-lg font-bold tabular-nums ${customerCreditAdjustmentsNet >= 0 ? 'text-slate-800' : 'text-red-600'}`}>{currency(customerCreditAdjustmentsNet)}</p>
+                    </div>
+                  </div>
+
+                  {customerCreditEntries.length === 0 ? (
+                    <div className="py-14 text-center">
+                      <Banknote size={32} className="text-slate-300 mx-auto mb-3" />
+                      <p className="text-slate-500 text-sm">No customer credit activity for this range</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                            <th className="px-4 py-3 text-left">Date</th>
+                            <th className="px-4 py-3 text-left">Type</th>
+                            <th className="px-4 py-3 text-left">Reference</th>
+                            <th className="px-4 py-3 text-left">Description</th>
+                            <th className="px-4 py-3 text-right">Debit (-)</th>
+                            <th className="px-4 py-3 text-right">Credit (+)</th>
+                            <th className="px-4 py-3 text-right">Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {customerCreditEntries.map(row => (
+                            <tr key={`${row.source_module}-${row.source_id}-${row.line_no}`} className={`hover:bg-slate-50 transition-colors ${highlightedSourceId === row.source_id ? 'bg-emerald-50/70' : ''}`}>
+                              <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.transaction_date)}</td>
+                              <td className="px-4 py-3">
+                                <span className={`inline-flex px-2.5 py-0.5 rounded-full border text-xs font-semibold whitespace-nowrap ${customerCreditTypeBadgeClass(row.transaction_type)}`}>
+                                  {customerCreditTypeLabel(row.transaction_type)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-500">{row.reference_no || '—'}</td>
+                              <td className="px-4 py-3 text-slate-700">{row.description || '—'}</td>
+                              <td className="px-4 py-3 text-right text-red-600 font-semibold tabular-nums">{row.debit_amount > 0 ? currency(row.debit_amount) : '—'}</td>
+                              <td className="px-4 py-3 text-right text-emerald-700 font-semibold tabular-nums">{row.credit_amount > 0 ? currency(row.credit_amount) : '—'}</td>
+                              <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(row.running_balance)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white rounded-xl border border-slate-200 p-6 text-sm text-slate-500">
+                  Select one customer to view and manage their Customer Credit Ledger.
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -1098,6 +1792,72 @@ export default function HaulerOffsetLedger({
         </div>
       )}
 
+      {showCustomerCreditModal && selectedCustomer && (
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={saveCustomerCreditEntry} className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Add Customer Credit</h2>
+                <p className="text-xs text-slate-500 mt-1">{selectedCustomer.name}</p>
+              </div>
+              <button type="button" onClick={() => { setShowCustomerCreditModal(false); setFormError(''); }} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100"><X size={18} /></button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {formError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {formError}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3">
+                <p className="text-xs font-semibold text-teal-700 uppercase">Current Available Credit</p>
+                <p className="text-2xl font-bold text-teal-800 tabular-nums mt-1">{currency(customerAvailableCredit)}</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Entry Type">
+                  <select value={customerCreditForm.transaction_type} onChange={e => setCustomerCreditFormValue('transaction_type', e.target.value as CustomerCreditManualType)} className={inputClass}>
+                    {customerCreditTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Date">
+                  <input required type="date" value={customerCreditForm.transaction_date} onChange={e => setCustomerCreditFormValue('transaction_date', e.target.value)} className={inputClass} />
+                </Field>
+                <Field label="Reference">
+                  <input value={customerCreditForm.reference_no} onChange={e => setCustomerCreditFormValue('reference_no', e.target.value)} className={inputClass} placeholder="OR / Receipt / Ref no." />
+                </Field>
+                <Field label="Amount">
+                  <input required type="number" min="0.01" step="0.01" value={customerCreditForm.amount} onChange={e => setCustomerCreditFormValue('amount', e.target.value)} className={inputClass} />
+                </Field>
+                {(customerCreditForm.transaction_type === 'OPENING_BALANCE' || customerCreditForm.transaction_type === 'ADJUSTMENT') && (
+                  <Field label="Entry Side">
+                    <select value={customerCreditForm.entry_side} onChange={e => setCustomerCreditFormValue('entry_side', e.target.value as EntrySide)} className={inputClass}>
+                      <option value="CREDIT">Credit (+ add to customer balance)</option>
+                      <option value="DEBIT">Debit (- reduce customer balance)</option>
+                    </select>
+                  </Field>
+                )}
+                <Field label="Description">
+                  <input value={customerCreditForm.description} onChange={e => setCustomerCreditFormValue('description', e.target.value)} className={inputClass} placeholder="Short description" />
+                </Field>
+              </div>
+
+              <Field label="Remarks">
+                <textarea value={customerCreditForm.remarks} onChange={e => setCustomerCreditFormValue('remarks', e.target.value)} className={`${inputClass} min-h-[90px]`} />
+              </Field>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+              <button type="button" onClick={() => { setShowCustomerCreditModal(false); setFormError(''); }} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
+                {saving ? 'Saving...' : 'Save Credit Entry'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {selectedEntry && (
         <DetailModal
           entry={selectedEntry}
@@ -1139,6 +1899,27 @@ function StatementRow({ label, value, positive = false }: { label: string; value
     <div className="flex items-center justify-between gap-3">
       <span className="text-slate-500">{label}</span>
       <span className={`font-semibold tabular-nums ${color}`}>{value < 0 ? '-' : ''}{currency(Math.abs(value))}</span>
+    </div>
+  );
+}
+
+function emptyCustomerCreditForm(defaultType: CustomerCreditManualType = 'ADVANCE_PAYMENT'): CustomerCreditForm {
+  return {
+    transaction_type: defaultType,
+    transaction_date: todayInput(),
+    reference_no: '',
+    description: '',
+    amount: '',
+    entry_side: 'CREDIT',
+    remarks: '',
+  };
+}
+
+function SummaryLine({ label, value, positive = false }: { label: string; value: string; positive?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-slate-500">{label}</span>
+      <span className={`font-semibold tabular-nums ${positive ? 'text-emerald-700' : 'text-slate-700'}`}>{value}</span>
     </div>
   );
 }

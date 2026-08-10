@@ -381,6 +381,7 @@ function PaymentBadge({ mode }: { mode: string }) {
   if (mode === 'P.O') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>;
   if (mode === 'GCASH') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">GCASH</span>;
   if (mode === 'BANK_TRANSFER') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">BANK</span>;
+  if (mode === 'CUSTOMER_CREDIT') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-100 text-teal-700">CREDIT</span>;
   if (mode === 'DONATION') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">DONATION</span>;
   if (mode === 'SPLIT') return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-cyan-100 text-cyan-700">SPLIT</span>;
   return <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>;

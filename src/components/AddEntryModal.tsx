@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle } from 'lucide-react';
+import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Wallet } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Customer, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
+import type { Customer, CustomerCreditEntry, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
 
 interface AddEntryModalProps {
@@ -19,6 +19,7 @@ interface ProductRow {
   height_cm: string;
   unit_price: string;
   dr_capitol: string;
+  delivery_fee: string;
   passway: string;
   kulot: string;
 }
@@ -39,7 +40,15 @@ interface SplitPaymentDetailInput {
   amount: string;
 }
 
-const todayDate = new Date().toISOString().split('T')[0];
+function toInputDate(date: Date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+const todayDate = toInputDate(new Date());
 const ATTACHMENTS_BUCKET = 'transaction-attachments';
 const MAX_ATTACHMENTS = 5;
 
@@ -52,6 +61,7 @@ function emptyProduct(defaultPrice = '', defaultMaterial = ''): ProductRow {
     height_cm: '',
     unit_price: defaultPrice,
     dr_capitol: '0',
+    delivery_fee: '0',
     passway: '0',
     kulot: '0',
   };
@@ -117,6 +127,7 @@ function txToForm(tx: TransactionWithRelations): FormData {
       height_cm: String(tx.height_cm),
       unit_price: String(tx.unit_price),
       dr_capitol: String(tx.dr_capitol),
+      delivery_fee: String(tx.delivery_fee ?? 0),
       passway: String(tx.passway),
       kulot: String(tx.kulot),
     }],
@@ -127,6 +138,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
   const isEditing = !!transaction;
   const [form, setForm] = useState<FormData>(isEditing ? txToForm(transaction!) : EMPTY_FORM);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerCreditBalances, setCustomerCreditBalances] = useState<Record<string, number>>({});
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
   const [trucksLoading, setTrucksLoading] = useState(false);
@@ -139,17 +151,38 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
   const [newAttachmentFiles, setNewAttachmentFiles] = useState<File[]>([]);
   const [showZeroPriceWarning, setShowZeroPriceWarning] = useState(false);
   const [splitPaymentError, setSplitPaymentError] = useState<string | null>(null);
+  const [customerCreditBalance, setCustomerCreditBalance] = useState(0);
+  const [customerCreditLoading, setCustomerCreditLoading] = useState(false);
+  const [customerCreditError, setCustomerCreditError] = useState<string | null>(null);
+
+  const loadCustomerCreditBalance = useCallback(async (customerId: string) => {
+    const { data, error } = await supabase.rpc('get_customer_credit_balance', {
+      p_customer_id: customerId,
+      p_exclude_source_table: isEditing ? 'transactions' : null,
+      p_exclude_source_id: isEditing ? transaction!.id : null,
+    });
+
+    if (error) throw new Error(error.message);
+    return Number(data ?? 0);
+  }, [isEditing, transaction]);
 
   useEffect(() => {
     Promise.all([
       supabase.from('customers').select('*').order('name'),
       supabase.from('pricing').select('*').order('material_type'),
-    ]).then(([c, p]) => {
+      supabase.from('customer_credit_entries').select('customer_id, debit_amount, credit_amount, status').eq('status', 'ACTIVE'),
+    ]).then(([c, p, creditEntries]) => {
       const customersData = (c.data ?? []) as Customer[];
       const pricingData = (p.data ?? []) as Pricing[];
+      const creditRows = (creditEntries.data ?? []) as Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>[];
+      const creditBalanceMap = creditRows.reduce<Record<string, number>>((map, row) => {
+        map[row.customer_id] = (map[row.customer_id] ?? 0) + Number(row.credit_amount ?? 0) - Number(row.debit_amount ?? 0);
+        return map;
+      }, {});
 
       setCustomers(customersData);
       setPricingList(pricingData);
+      setCustomerCreditBalances(creditBalanceMap);
 
       if (!isEditing && pricingData.length > 0) {
         setForm(f => ({
@@ -219,6 +252,38 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     };
   }, [form.customer_id, isEditing, transaction]);
 
+  useEffect(() => {
+    let active = true;
+
+    async function fetchCustomerCreditBalance() {
+      if (!form.customer_id) {
+        setCustomerCreditBalance(0);
+        setCustomerCreditError(null);
+        setCustomerCreditLoading(false);
+        return;
+      }
+
+      setCustomerCreditLoading(true);
+      setCustomerCreditError(null);
+      try {
+        const balance = await loadCustomerCreditBalance(form.customer_id);
+        if (!active) return;
+        setCustomerCreditBalance(balance);
+      } catch (error) {
+        if (!active) return;
+        setCustomerCreditBalance(0);
+        setCustomerCreditError(error instanceof Error ? error.message : 'Unable to load customer credit balance.');
+      }
+      setCustomerCreditLoading(false);
+    }
+
+    fetchCustomerCreditBalance();
+
+    return () => {
+      active = false;
+    };
+  }, [form.customer_id, loadCustomerCreditBalance]);
+
   const n = (val: string) => parseFloat(val) || 0;
 
   const productVolume = useCallback((p: ProductRow) => {
@@ -228,11 +293,20 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
 
   const productAmount = useCallback((p: ProductRow) => parseFloat((productVolume(p) * n(p.unit_price)).toFixed(2)), [productVolume]);
 
-  const productTotal = useCallback((p: ProductRow) => productAmount(p) + n(p.dr_capitol) + n(p.passway) + n(p.kulot), [productAmount]);
+  const productTotal = useCallback((p: ProductRow) => productAmount(p) + n(p.dr_capitol) + n(p.delivery_fee) + n(p.passway) + n(p.kulot), [productAmount]);
 
   const rawGrandTotal = form.products.reduce((sum, p) => sum + productTotal(p), 0);
   const isDonationMode = form.payment_mode === 'DONATION';
   const grandTotal = isDonationMode ? 0 : rawGrandTotal;
+  const selectedCustomer = customers.find(customer => customer.id === form.customer_id) ?? null;
+  const selectedCustomerLabel = selectedCustomer?.name ?? 'selected customer';
+  const selectedCustomerCreditAmount = form.payment_mode === 'CUSTOMER_CREDIT'
+    ? grandTotal
+    : form.payment_mode === 'SPLIT'
+      ? form.split_payment_details.reduce((sum, detail) => detail.mode === 'CUSTOMER_CREDIT' ? sum + (Number(detail.amount) || 0) : sum, 0)
+      : 0;
+  const customerCreditShortfallFor = (balance: number) => selectedCustomerCreditAmount > balance + SPLIT_AMOUNT_TOLERANCE;
+  const hasCustomerCreditShortfall = customerCreditShortfallFor(customerCreditBalance);
 
   const setHeader = (key: keyof Omit<FormData, 'products' | 'split_payment_details'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
@@ -241,12 +315,14 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     }
     if (key === 'payment_mode') {
       setSplitPaymentError(null);
+      setSaveError(null);
     }
   };
 
   const handleCustomerChange = (customerId: string) => {
     setForm(f => ({ ...f, customer_id: customerId, truck_id: '' }));
     setHeaderErrors(e => ({ ...e, customer_id: undefined, truck_id: undefined }));
+    setSaveError(null);
   };
 
   const setProduct = (index: number, key: keyof ProductRow, val: string) => {
@@ -365,8 +441,9 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     setHeaderErrors(e => ({ ...e, truck_id: undefined }));
   };
 
-  function validate() {
+  function validate(creditBalance = customerCreditBalance) {
     let valid = true;
+    const hasCreditShortfall = customerCreditShortfallFor(creditBalance);
     const hErrs: Partial<Record<'customer_id' | 'truck_id', string>> = {};
     if (!form.customer_id) { hErrs.customer_id = 'Required'; valid = false; }
     if (!form.truck_id) { hErrs.truck_id = 'Required'; valid = false; }
@@ -398,12 +475,20 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
         } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > SPLIT_AMOUNT_TOLERANCE) {
           setSplitPaymentError(`Split payment amounts must total ₱${fmt(grandTotal)}.`);
           valid = false;
+        } else if (selectedCustomerCreditAmount > 0 && hasCreditShortfall) {
+          setSplitPaymentError(`Customer Credit for ${selectedCustomerLabel} exceeds available balance of PHP ${fmt(creditBalance)}.`);
+          valid = false;
         } else {
           setSplitPaymentError(null);
         }
       }
     } else {
       setSplitPaymentError(null);
+    }
+
+    if (form.payment_mode === 'CUSTOMER_CREDIT' && hasCreditShortfall) {
+      setSaveError(`Insufficient customer credit balance for ${selectedCustomerLabel}. Available: PHP ${fmt(creditBalance)}, required: PHP ${fmt(selectedCustomerCreditAmount)}.`);
+      valid = false;
     }
 
     return valid;
@@ -475,10 +560,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
           height_cm: n(p.height_cm),
           unit_price: isDonationMode ? 0 : n(p.unit_price),
           dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+          delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
           passway: isDonationMode ? 0 : n(p.passway),
           kulot: isDonationMode ? 0 : n(p.kulot),
           payment_mode: form.payment_mode,
-          status: isDonationMode ? 'PAID' : form.status,
+          status: isDonationMode || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : form.status,
           notes: form.notes,
           attachment_urls: attachmentUrls,
           split_payment_details: splitDetails,
@@ -506,10 +592,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
           height_cm: n(p.height_cm),
           unit_price: isDonationMode ? 0 : n(p.unit_price),
           dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+          delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
           passway: isDonationMode ? 0 : n(p.passway),
           kulot: isDonationMode ? 0 : n(p.kulot),
           payment_mode: form.payment_mode,
-          status: (isDonationMode || form.payment_mode === 'CASH' ? 'PAID' : 'PENDING') as TransactionStatus,
+          status: (isDonationMode || form.payment_mode === 'CASH' || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : 'PENDING') as TransactionStatus,
           notes: form.notes,
           attachment_urls: attachmentUrls,
           split_payment_details: form.payment_mode === 'SPLIT'
@@ -542,7 +629,24 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!validate()) return;
+    let validationCreditBalance = customerCreditBalance;
+    if (form.customer_id && selectedCustomerCreditAmount > 0) {
+      setCustomerCreditLoading(true);
+      setCustomerCreditError(null);
+      try {
+        validationCreditBalance = await loadCustomerCreditBalance(form.customer_id);
+        setCustomerCreditBalance(validationCreditBalance);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to load customer credit balance.';
+        setCustomerCreditError(message);
+        setSaveError(message);
+        setCustomerCreditLoading(false);
+        return;
+      }
+      setCustomerCreditLoading(false);
+    }
+
+    if (!validate(validationCreditBalance)) return;
     if (hasZeroUnitPrice) {
       setShowZeroPriceWarning(true);
       return;
@@ -553,6 +657,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const paymentModes: PaymentMode[] = [...PAYMENT_MODES];
+  const customerCreditUnavailableForFullPayment = !form.customer_id || hasCustomerCreditShortfall || customerCreditBalance <= 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -586,7 +691,14 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
             <Field label="Customer" error={headerErrors.customer_id}>
               <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)} className={selectCls(!!headerErrors.customer_id)}>
                 <option value="">Select customer...</option>
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {customers.map(c => {
+                  const creditBalance = customerCreditBalances[c.id] ?? 0;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{creditBalance > 0 ? ` - Credit PHP ${fmt(creditBalance)}` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </Field>
             <Field label="Truck Plate #" error={headerErrors.truck_id}>
@@ -613,12 +725,34 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
               className={selectCls(false)}
             >
               {paymentModes.map(mode => (
-                <option key={mode} value={mode}>
-                  {mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : mode}
+                <option
+                  key={mode}
+                  value={mode}
+                  disabled={mode === 'CUSTOMER_CREDIT' && form.payment_mode !== 'CUSTOMER_CREDIT' && customerCreditUnavailableForFullPayment}
+                >
+                  {mode === 'BANK_TRANSFER'
+                    ? 'BANK TRANSFER'
+                    : mode === 'CUSTOMER_CREDIT'
+                      ? `CUSTOMER CREDIT${form.customer_id ? ` (PHP ${fmt(customerCreditBalance)})` : ''}`
+                      : mode}
                 </option>
               ))}
             </select>
           </Field>
+
+          {form.customer_id && (
+            <div className={`rounded-xl border px-4 py-3 text-sm ${hasCustomerCreditShortfall ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-100 bg-emerald-50 text-emerald-800'}`}>
+              <div className="flex items-center gap-2">
+                <Wallet size={16} />
+                <span className="font-semibold">Customer Credit Balance for {selectedCustomerLabel}:</span>
+                <span className="font-bold tabular-nums">{customerCreditLoading ? 'Loading...' : `PHP ${fmt(customerCreditBalance)}`}</span>
+              </div>
+              {customerCreditError && <p className="text-xs mt-1 text-red-600">{customerCreditError}</p>}
+              {hasCustomerCreditShortfall && (
+                <p className="text-xs mt-1">Insufficient balance for the selected customer credit amount. Use P.O, cash, or another mode instead.</p>
+              )}
+            </div>
+          )}
 
           {form.payment_mode === 'SPLIT' && (
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-3">
@@ -626,10 +760,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
               <div className="flex gap-2 flex-wrap">
                 {splitModes.map(mode => {
                   const active = form.split_payment_details.some(detail => detail.mode === mode);
+                  const disabled = mode === 'CUSTOMER_CREDIT' && !active && (!form.customer_id || customerCreditBalance <= 0);
                   return (
                     <button
                       key={mode}
                       type="button"
+                      disabled={disabled}
                       onClick={() => toggleSplitMode(mode)}
                       className={`flex-1 min-w-[88px] py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
                         active
@@ -641,11 +777,15 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
                                 ? 'bg-blue-500 border-blue-500 text-white'
                                 : mode === 'BANK_TRANSFER'
                                   ? 'bg-violet-500 border-violet-500 text-white'
-                                  : 'bg-slate-600 border-slate-600 text-white'
-                          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                                  : mode === 'CUSTOMER_CREDIT'
+                                    ? 'bg-teal-500 border-teal-500 text-white'
+                                    : 'bg-slate-600 border-slate-600 text-white'
+                          : disabled
+                            ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                            : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
                       }`}
                     >
-                      {mode === 'BANK_TRANSFER' ? 'BANK' : mode}
+                      {mode === 'BANK_TRANSFER' ? 'BANK' : mode === 'CUSTOMER_CREDIT' ? 'CREDIT' : mode}
                     </button>
                   );
                 })}
@@ -653,10 +793,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
               {form.split_payment_details.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {form.split_payment_details.map(detail => (
-                    <Field key={detail.mode} label={`${detail.mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : detail.mode} Amount`}>
+                    <Field key={detail.mode} label={`${detail.mode === 'BANK_TRANSFER' ? 'BANK TRANSFER' : detail.mode === 'CUSTOMER_CREDIT' ? 'CUSTOMER CREDIT' : detail.mode} Amount`}>
                       <input
                         type="number"
                         min="0"
+                        max={detail.mode === 'CUSTOMER_CREDIT' ? customerCreditBalance : undefined}
                         step="0.01"
                         value={detail.amount}
                         onChange={e => setSplitAmount(detail.mode, e.target.value)}
@@ -1004,12 +1145,12 @@ function ProductSection({ index, product, errors, pricingList, showRemove, onRem
         </div>
       </Field>
 
-      {/* Extra Fees */}
+      {/* Fees */}
       <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Extra Fees (₱)</p>
-        <div className="grid grid-cols-3 gap-3">
-          {(['dr_capitol', 'passway', 'kulot'] as const).map((key, i) => (
-            <Field key={key} label={['DR Capitol', 'Passway', 'Kulot'][i]}>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Fees (PHP)</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {(['dr_capitol', 'delivery_fee', 'passway', 'kulot'] as const).map((key, i) => (
+            <Field key={key} label={['DR Capitol', 'Delivery Fee', 'Passway', 'Kulot'][i]}>
               <input
                 type="number"
                 step="0.01"

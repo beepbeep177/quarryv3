@@ -2,7 +2,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type UserRole = 'manager' | 'operator';
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' | 'DONATION' | 'SPLIT';
+export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' | 'DONATION' | 'SPLIT' | 'CUSTOMER_CREDIT';
 export type TransactionStatus = 'PENDING' | 'PAID';
 export type ActivityCode =
   | 'DASHBOARD_VIEW'
@@ -41,6 +41,10 @@ export type ActivityCode =
   | 'HAULER_OFFSET_LEDGER_ADJUST'
   | 'HAULER_STATEMENT_VIEW'
   | 'HAULER_STATEMENT_EXPORT'
+  | 'CUSTOMER_CREDIT_VIEW'
+  | 'CUSTOMER_CREDIT_ADD'
+  | 'CUSTOMER_CREDIT_ADJUST'
+  | 'CUSTOMER_CREDIT_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -378,6 +382,7 @@ export type Database = {
           unit_price: number;
           amount: number;
           dr_capitol: number;
+          delivery_fee: number;
           passway: number;
           kulot: number;
           total_amount: number;
@@ -399,6 +404,7 @@ export type Database = {
           height_cm?: number;
           unit_price?: number;
           dr_capitol?: number;
+          delivery_fee?: number;
           passway?: number;
           kulot?: number;
           material_type?: string;
@@ -418,6 +424,7 @@ export type Database = {
           height_cm?: number;
           unit_price?: number;
           dr_capitol?: number;
+          delivery_fee?: number;
           passway?: number;
           kulot?: number;
           material_type?: string;
@@ -558,6 +565,130 @@ export type Database = {
           {
             foreignKeyName: 'hauler_offset_entries_hauler_id_fkey';
             columns: ['hauler_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      customer_credit_entries: {
+        Row: {
+          id: string;
+          customer_id: string;
+          transaction_date: string;
+          transaction_type: 'OPENING_BALANCE' | 'ADVANCE_PAYMENT' | 'PURCHASE_DEDUCTION' | 'ADJUSTMENT' | 'REVERSAL';
+          reference_no: string;
+          description: string;
+          debit_amount: number;
+          credit_amount: number;
+          status: 'ACTIVE' | 'VOIDED';
+          source_table: string | null;
+          source_id: string | null;
+          remarks: string;
+          details: Json;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          voided_by: string | null;
+          voided_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          customer_id: string;
+          transaction_date?: string;
+          transaction_type: 'OPENING_BALANCE' | 'ADVANCE_PAYMENT' | 'PURCHASE_DEDUCTION' | 'ADJUSTMENT' | 'REVERSAL';
+          reference_no?: string;
+          description?: string;
+          debit_amount?: number;
+          credit_amount?: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          source_table?: string | null;
+          source_id?: string | null;
+          remarks?: string;
+          details?: Json;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Update: {
+          customer_id?: string;
+          transaction_date?: string;
+          transaction_type?: 'OPENING_BALANCE' | 'ADVANCE_PAYMENT' | 'PURCHASE_DEDUCTION' | 'ADJUSTMENT' | 'REVERSAL';
+          reference_no?: string;
+          description?: string;
+          debit_amount?: number;
+          credit_amount?: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          source_table?: string | null;
+          source_id?: string | null;
+          remarks?: string;
+          details?: Json;
+          created_by?: string | null;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'customer_credit_entries_customer_id_fkey';
+            columns: ['customer_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      customer_credit_settlements: {
+        Row: {
+          id: string;
+          transaction_id: string;
+          customer_id: string;
+          settlement_date: string;
+          amount: number;
+          status: 'ACTIVE' | 'VOIDED';
+          remarks: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          voided_by: string | null;
+          voided_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          transaction_id: string;
+          customer_id: string;
+          settlement_date?: string;
+          amount: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          remarks?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Update: {
+          transaction_id?: string;
+          customer_id?: string;
+          settlement_date?: string;
+          amount?: number;
+          status?: 'ACTIVE' | 'VOIDED';
+          remarks?: string;
+          created_by?: string | null;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'customer_credit_settlements_transaction_id_fkey';
+            columns: ['transaction_id'];
+            referencedRelation: 'transactions';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'customer_credit_settlements_customer_id_fkey';
+            columns: ['customer_id'];
             referencedRelation: 'customers';
             referencedColumns: ['id'];
           },
@@ -892,6 +1023,81 @@ export type Database = {
           created_at: string;
         }[];
       };
+      get_transaction_customer_credit_amount: {
+        Args: {
+          p_payment_mode: string;
+          p_total_amount: number;
+          p_split_payment_details?: Json;
+        };
+        Returns: number;
+      };
+      get_customer_credit_balance: {
+        Args: {
+          p_customer_id: string;
+          p_exclude_source_table?: string | null;
+          p_exclude_source_id?: string | null;
+        };
+        Returns: number;
+      };
+      create_customer_credit_entry: {
+        Args: {
+          p_customer_id: string;
+          p_transaction_date: string;
+          p_transaction_type: 'OPENING_BALANCE' | 'ADVANCE_PAYMENT' | 'ADJUSTMENT';
+          p_reference_no: string;
+          p_description: string;
+          p_amount: number;
+          p_entry_side?: 'DEBIT' | 'CREDIT' | null;
+          p_remarks?: string;
+          p_details?: Json;
+        };
+        Returns: Database['public']['Tables']['customer_credit_entries']['Row'];
+      };
+      void_customer_credit_entry: {
+        Args: {
+          p_entry_id: string;
+          p_reason?: string;
+        };
+        Returns: Database['public']['Tables']['customer_credit_entries']['Row'];
+      };
+      settle_receivable_with_customer_credit: {
+        Args: {
+          p_transaction_id: string;
+          p_settlement_date?: string;
+          p_remarks?: string;
+        };
+        Returns: Database['public']['Tables']['customer_credit_settlements']['Row'];
+      };
+      get_customer_credit_ledger: {
+        Args: {
+          p_customer_id: string;
+          p_date_from: string;
+          p_date_to: string;
+        };
+        Returns: {
+          row_kind: 'SUMMARY' | 'ENTRY';
+          line_no: number;
+          customer_id: string;
+          customer_name: string;
+          transaction_date: string | null;
+          transaction_type: 'OPENING_BALANCE' | 'ADVANCE_PAYMENT' | 'PURCHASE_DEDUCTION' | 'ADJUSTMENT' | 'REVERSAL' | null;
+          source_module: 'customer_credit_entries' | 'customer_credit_settlements' | 'transactions' | null;
+          source_id: string | null;
+          reference_no: string;
+          description: string;
+          debit_amount: number;
+          credit_amount: number;
+          running_balance: number;
+          opening_balance: number;
+          advances: number;
+          purchases: number;
+          adjustments_debit: number;
+          adjustments_credit: number;
+          closing_balance: number;
+          source_payload: Json;
+          created_at: string;
+        }[];
+      };
       create_fuel_purchase: {
         Args: {
           p_branch_id: string;
@@ -957,11 +1163,14 @@ export type ExpenseCategory = Database['public']['Tables']['expense_categories']
 export type Expense = Database['public']['Tables']['expenses']['Row'];
 export type HaulerOffsetEntry = Database['public']['Tables']['hauler_offset_entries']['Row'];
 export type HaulerOffsetLedgerRow = Database['public']['Functions']['get_hauler_offset_ledger']['Returns'][number];
+export type CustomerCreditEntry = Database['public']['Tables']['customer_credit_entries']['Row'];
+export type CustomerCreditLedgerRow = Database['public']['Functions']['get_customer_credit_ledger']['Returns'][number];
 export type FuelBranch = Database['public']['Tables']['fuel_branches']['Row'];
 export type FuelInventoryState = Database['public']['Tables']['fuel_inventory_state']['Row'];
 export type FuelPurchase = Database['public']['Tables']['fuel_purchases']['Row'];
 export type FuelIssuance = Database['public']['Tables']['fuel_issuances']['Row'];
 export type FuelInventoryLedger = Database['public']['Tables']['fuel_inventory_ledger']['Row'];
+export type CustomerCreditSettlement = Database['public']['Tables']['customer_credit_settlements']['Row'];
 
 export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
   old_data: Record<string, unknown> | null;

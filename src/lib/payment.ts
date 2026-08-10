@@ -1,6 +1,6 @@
 import type { PaymentMode, TransactionWithRelations } from './database.types';
 
-export const SPLIT_PAYMENT_MODES = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER'] as const;
+export const SPLIT_PAYMENT_MODES = ['CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER', 'CUSTOMER_CREDIT'] as const;
 export type SplitPaymentMode = (typeof SPLIT_PAYMENT_MODES)[number];
 
 export const PAYMENT_MODES = [...SPLIT_PAYMENT_MODES, 'DONATION', 'SPLIT'] as const satisfies readonly PaymentMode[];

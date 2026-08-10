@@ -25,7 +25,7 @@ import ExpensesLedger from './ExpensesLedger';
 export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
 type Grouping = 'DAY' | 'WEEK' | 'MONTH';
-type ExtraFeeFilter = 'ALL' | 'dr_capitol' | 'passway' | 'kulot';
+type ExtraFeeFilter = 'ALL' | 'dr_capitol' | 'delivery_fee' | 'passway' | 'kulot';
 
 const REPORT_PAGE_SIZE = 10;
 
@@ -38,7 +38,9 @@ interface SalesSummary {
   offset: number;
   gcash: number;
   bankTransfer: number;
+  customerCredit: number;
   drFees: number;
+  deliveryFees: number;
   extraFees: number;
   total: number;
 }
@@ -319,6 +321,10 @@ function reportDrFeesAmount(tx: TransactionWithRelations) {
   return tx.dr_capitol ?? 0;
 }
 
+function reportDeliveryFeesAmount(tx: TransactionWithRelations) {
+  return tx.delivery_fee ?? 0;
+}
+
 function reportExcludedFeesAmount(tx: TransactionWithRelations) {
   return (tx.passway ?? 0) + (tx.kulot ?? 0);
 }
@@ -581,14 +587,15 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     transactions.forEach(tx => {
       const bucketStart = getBucketStart(tx.transaction_date, range.salesGrouping);
       if (!bucketMap[bucketStart]) {
-        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, gcash: 0, bankTransfer: 0, drFees: 0, extraFees: 0, total: 0 };
+        bucketMap[bucketStart] = { bucketStart, count: 0, volume: 0, cash: 0, po: 0, offset: 0, gcash: 0, bankTransfer: 0, customerCredit: 0, drFees: 0, deliveryFees: 0, extraFees: 0, total: 0 };
       }
 
       bucketMap[bucketStart].count += 1;
       bucketMap[bucketStart].volume += tx.volume_m3 ?? 0;
-      // Net sales includes DR fees; only Passway and Kulot are excluded.
+      // Net sales includes DR fees; delivery, Passway, and Kulot are excluded.
       bucketMap[bucketStart].total += reportNetSalesAmount(tx);
       bucketMap[bucketStart].drFees += reportDrFeesAmount(tx);
+      bucketMap[bucketStart].deliveryFees += reportDeliveryFeesAmount(tx);
       bucketMap[bucketStart].extraFees += reportExcludedFeesAmount(tx);
 
       bucketMap[bucketStart].cash += getPaymentModeAmount(tx, 'CASH');
@@ -596,6 +603,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       bucketMap[bucketStart].offset += getPaymentModeAmount(tx, 'OFFSET');
       bucketMap[bucketStart].gcash += getPaymentModeAmount(tx, 'GCASH');
       bucketMap[bucketStart].bankTransfer += getPaymentModeAmount(tx, 'BANK_TRANSFER');
+      bucketMap[bucketStart].customerCredit += getPaymentModeAmount(tx, 'CUSTOMER_CREDIT');
     });
 
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
@@ -603,14 +611,15 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
 
   const grandNetSales = useMemo(() => transactions.reduce((sum, tx) => sum + reportNetSalesAmount(tx), 0), [transactions]);
   const grandDrFees = useMemo(() => transactions.reduce((sum, tx) => sum + reportDrFeesAmount(tx), 0), [transactions]);
+  const grandDeliveryFees = useMemo(() => transactions.reduce((sum, tx) => sum + reportDeliveryFeesAmount(tx), 0), [transactions]);
   const grandExtraFees = useMemo(() => transactions.reduce((sum, tx) => sum + reportExcludedFeesAmount(tx), 0), [transactions]);
-  const grandTotalWithFees = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.total_amount ?? 0), 0), [transactions]);
   const grandVolume = useMemo(() => transactions.reduce((sum, tx) => sum + (tx.volume_m3 ?? 0), 0), [transactions]);
   const cashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'CASH'), 0), [transactions]);
   const poTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'P.O'), 0), [transactions]);
   const offsetTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'OFFSET'), 0), [transactions]);
   const gcashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'GCASH'), 0), [transactions]);
   const bankTransferTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'BANK_TRANSFER'), 0), [transactions]);
+  const customerCreditTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'CUSTOMER_CREDIT'), 0), [transactions]);
 
   const expenseSummaryList = useMemo(() => {
     const bucketMap: Record<string, ExpenseSummaryRow> = {};
@@ -711,7 +720,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       }
       map[materialType].quantity += 1;
       map[materialType].volume += tx.volume_m3 ?? 0;
-      map[materialType].revenue += tx.total_amount ?? 0;
+      map[materialType].revenue += reportNetSalesAmount(tx);
     });
 
     return Object.values(map).sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue || a.materialType.localeCompare(b.materialType));
@@ -738,10 +747,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     const rows = productSalesList.map(product => ({
       label: product.materialType,
       amount: product.revenue,
-      share: grandTotalWithFees > 0 ? (product.revenue / grandTotalWithFees) * 100 : 0,
+      share: grandNetSales > 0 ? (product.revenue / grandNetSales) * 100 : 0,
     }));
     return compactFinancialLineItems(rows, 'Other Sales');
-  }, [grandTotalWithFees, productSalesList]);
+  }, [grandNetSales, productSalesList]);
 
   const expenseLineItems = useMemo(() => {
     const rows = expenseCategoryTotals.map(([label, amount]) => ({
@@ -763,7 +772,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     transactions.forEach(tx => {
       const bucketStart = getBucketStart(tx.transaction_date, netGrouping);
       if (!bucketMap[bucketStart]) bucketMap[bucketStart] = { bucketStart, revenue: 0, expenses: 0 };
-      bucketMap[bucketStart].revenue += tx.total_amount ?? 0;
+      bucketMap[bucketStart].revenue += reportNetSalesAmount(tx);
     });
 
     expenses.forEach(expense => {
@@ -775,7 +784,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     return Object.values(bucketMap).sort((a, b) => b.bucketStart.localeCompare(a.bucketStart));
   }, [transactions, expenses, range.start, range.end, netGrouping]);
 
-  const netIncome = grandTotalWithFees - totalExpenses;
+  const netIncome = grandNetSales - totalExpenses;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
 
   const salesCurrentPage = Math.min(salesPage, Math.max(1, Math.ceil(salesSummaryList.length / REPORT_PAGE_SIZE)));
@@ -803,7 +812,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
         title: 'Sales Summary',
         filename: `sales-summary-${slugify(range.label)}`,
         filterLines: baseFilterLines,
-        headers: ['Period', 'Transactions', 'Volume (m3)', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'DR Fees', 'Extra Fees', 'Net Sales'],
+        headers: ['Period', 'Transactions', 'Volume (m3)', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'Customer Credit', 'DR Fees', 'Delivery Fee', 'Extra Fees', 'Net Sales'],
         rows: salesSummaryList.map(summary => [
           formatBucketLabel(summary.bucketStart, range.salesGrouping),
           summary.count,
@@ -813,11 +822,13 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           fmt(summary.offset),
           fmt(summary.gcash),
           fmt(summary.bankTransfer),
+          fmt(summary.customerCredit),
           fmt(summary.drFees),
+          fmt(summary.deliveryFees),
           fmt(summary.extraFees),
           fmt(summary.total),
         ]),
-        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(grandDrFees), fmt(grandExtraFees), fmt(grandNetSales)],
+        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(customerCreditTotal), fmt(grandDrFees), fmt(grandDeliveryFees), fmt(grandExtraFees), fmt(grandNetSales)],
       };
     }
 
@@ -830,7 +841,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
         title: 'Customer Sales History',
         filename: `customer-sales-history-${slugify(customerLabel)}-${slugify(range.label)}`,
         filterLines: [...baseFilterLines, `Customer: ${customerLabel}`, `Payment mode: ${selectedPayment}`, `Product: ${selectedMaterial}`],
-        headers: ['Date', 'DR #', 'Customer', 'Truck', 'Material', 'Length (cm)', 'Width (cm)', 'Height (cm)', 'Volume (m3)', 'Unit Price', 'Amount', 'DR Capitol', 'Passway', 'Kulot', 'Total', 'Mode', 'Status', 'Notes'],
+        headers: ['Date', 'DR #', 'Customer', 'Truck', 'Material', 'Length (cm)', 'Width (cm)', 'Height (cm)', 'Volume (m3)', 'Unit Price', 'Amount', 'DR Capitol', 'Delivery Fee', 'Passway', 'Kulot', 'Total', 'Mode', 'Status', 'Notes'],
         rows: customerTransactions.map(tx => [
           formatDateLabel(tx.transaction_date, { month: 'short', day: 'numeric', year: 'numeric' }),
           tx.dr_number || '',
@@ -844,6 +855,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           fmt(tx.unit_price ?? 0),
           fmt(tx.amount ?? 0),
           fmt(tx.dr_capitol ?? 0),
+          fmt(tx.delivery_fee ?? 0),
           fmt(tx.passway ?? 0),
           fmt(tx.kulot ?? 0),
           fmt(tx.total_amount ?? 0),
@@ -851,7 +863,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           tx.status ?? '',
           tx.notes ?? '',
         ]),
-        totals: ['Totals', '', '', '', '', '', '', '', formatVolume(customerTotalVolume), '', fmt(customerTransactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.passway ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.kulot ?? 0), 0)), fmt(customerTotalSales), '', '', ''],
+        totals: ['Totals', '', '', '', '', '', '', '', formatVolume(customerTotalVolume), '', fmt(customerTransactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.delivery_fee ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.passway ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.kulot ?? 0), 0)), fmt(customerTotalSales), '', '', ''],
       };
     }
 
@@ -896,9 +908,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           'Revenue',
           item.label,
           fmt(item.amount),
-          grandTotalWithFees > 0 ? `${item.share.toFixed(2)}%` : '',
+          grandNetSales > 0 ? `${item.share.toFixed(2)}%` : '',
         ]),
-        ['Revenue', 'Total Revenue', fmt(grandTotalWithFees), grandTotalWithFees > 0 ? '100.00%' : ''],
+        ['Revenue', 'Total Revenue', fmt(grandNetSales), grandNetSales > 0 ? '100.00%' : ''],
         ['', '', '', ''],
         ...expenseLineItems.map(item => [
           'Expenses',
@@ -914,18 +926,18 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     activeTab,
     bankTransferTotal,
     cashTotal,
+    customerCreditTotal,
     customerTotalSales,
     customerTotalVolume,
     customerTransactions,
     expenseCategoryTotals,
     gcashTotal,
+    grandDeliveryFees,
     grandExtraFees,
     grandDrFees,
     grandNetSales,
-    grandTotalWithFees,
     grandVolume,
     materialTypeFilter,
-    netGrouping,
     netIncome,
     netIncomeList,
     offsetTotal,
@@ -1076,6 +1088,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                         ? 'bg-blue-100 text-blue-700'
                         : selectedTransaction.payment_mode === 'BANK_TRANSFER'
                           ? 'bg-violet-100 text-violet-700'
+                          : selectedTransaction.payment_mode === 'CUSTOMER_CREDIT'
+                            ? 'bg-teal-100 text-teal-700'
                           : selectedTransaction.payment_mode === 'OFFSET'
                             ? 'bg-pink-100 text-pink-700'
                             : selectedTransaction.payment_mode === 'DONATION'
@@ -1086,6 +1100,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                 }`}>
                   {selectedTransaction.payment_mode === 'BANK_TRANSFER'
                     ? 'BANK TRANSFER'
+                    : selectedTransaction.payment_mode === 'CUSTOMER_CREDIT'
+                      ? 'CUSTOMER CREDIT'
                     : selectedTransaction.payment_mode}
                 </span>
               </div>
@@ -1152,6 +1168,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">DR Capitol</span>
                   <span className="text-slate-700 tabular-nums">₱{fmt(selectedTransaction.dr_capitol ?? 0)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Delivery Fee</span>
+                  <span className="text-slate-700 tabular-nums">₱{fmt(selectedTransaction.delivery_fee ?? 0)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Passway</span>
@@ -1325,6 +1345,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                 <option value="P.O">P.O</option>
                 <option value="GCASH">GCash</option>
                 <option value="BANK_TRANSFER">Bank Transfer</option>
+                <option value="CUSTOMER_CREDIT">Customer Credit</option>
                 <option value="OFFSET">Offset</option>
                 <option value="DONATION">Donation</option>
                 <option value="SPLIT">Split</option>
@@ -1348,6 +1369,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
               >
                 <option value="ALL">All Extra Fees</option>
                 <option value="dr_capitol">DR Capitol</option>
+                <option value="delivery_fee">Delivery Fee</option>
                 <option value="passway">Passway</option>
                 <option value="kulot">Kulot</option>
               </select>
@@ -1428,6 +1450,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
               { label: 'P.O Receivable', value: `₱${fmt(poTotal)}`, icon: <ReceiptText size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
               { label: 'GCash Sales', value: `₱${fmt(gcashTotal)}`, icon: <Banknote size={18} className="text-blue-500" />, bg: 'bg-blue-50' },
               { label: 'Bank Transfer', value: `₱${fmt(bankTransferTotal)}`, icon: <Banknote size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
+              { label: 'Customer Credit', value: `₱${fmt(customerCreditTotal)}`, icon: <Banknote size={18} className="text-teal-500" />, bg: 'bg-teal-50' },
             ].map(card => (
               <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>
@@ -1463,7 +1486,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <th className="px-4 py-3 text-right">Offset</th>
                       <th className="px-4 py-3 text-right">GCash</th>
                       <th className="px-4 py-3 text-right">Bank</th>
+                      <th className="px-4 py-3 text-right">Credit</th>
                       <th className="px-4 py-3 text-right">DR Fees</th>
+                      <th className="px-4 py-3 text-right">Delivery</th>
                       <th className="px-4 py-3 text-right">Extra Fees</th>
                       <th className="px-4 py-3 text-right">Net Sales</th>
                     </tr>
@@ -1481,7 +1506,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                         <td className="px-4 py-3 text-right text-slate-500 tabular-nums">{summary.offset > 0 ? `₱${fmt(summary.offset)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-blue-600 tabular-nums">{summary.gcash > 0 ? `₱${fmt(summary.gcash)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-violet-600 tabular-nums">{summary.bankTransfer > 0 ? `₱${fmt(summary.bankTransfer)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-teal-600 tabular-nums">{summary.customerCredit > 0 ? `₱${fmt(summary.customerCredit)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-emerald-600 tabular-nums">{summary.drFees > 0 ? `₱${fmt(summary.drFees)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-sky-600 tabular-nums">{summary.deliveryFees > 0 ? `₱${fmt(summary.deliveryFees)}` : '—'}</td>
                         <td className="px-4 py-3 text-right text-orange-500 tabular-nums">{summary.extraFees > 0 ? `₱${fmt(summary.extraFees)}` : '—'}</td>
                         <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(summary.total)}</td>
                       </tr>
@@ -1497,7 +1524,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(offsetTotal)}</td>
                       <td className="px-4 py-3 text-right text-blue-400 font-semibold tabular-nums">₱{fmt(gcashTotal)}</td>
                       <td className="px-4 py-3 text-right text-violet-400 font-semibold tabular-nums">₱{fmt(bankTransferTotal)}</td>
+                      <td className="px-4 py-3 text-right text-teal-400 font-semibold tabular-nums">₱{fmt(customerCreditTotal)}</td>
                       <td className="px-4 py-3 text-right text-emerald-400 font-semibold tabular-nums">₱{fmt(grandDrFees)}</td>
+                      <td className="px-4 py-3 text-right text-sky-400 font-semibold tabular-nums">₱{fmt(grandDeliveryFees)}</td>
                       <td className="px-4 py-3 text-right text-orange-400 font-semibold tabular-nums">₱{fmt(grandExtraFees)}</td>
                       <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandNetSales)}</td>
                     </tr>
@@ -1604,6 +1633,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                     <th className="px-4 py-3 text-right">Unit Price</th>
                     <th className="px-4 py-3 text-right">Amount</th>
                     <th className="px-4 py-3 text-right">DR Capitol</th>
+                    <th className="px-4 py-3 text-right">Delivery</th>
                     <th className="px-4 py-3 text-right">Passway</th>
                     <th className="px-4 py-3 text-right">Kulot</th>
                     <th className="px-4 py-3 text-right">Total</th>
@@ -1674,6 +1704,9 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
                         ₱{fmt(tx.dr_capitol ?? 0)}
                       </td>
+                      <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
+                        ₱{fmt(tx.delivery_fee ?? 0)}
+                      </td>
 
                       <td className="px-4 py-3 text-right text-slate-600 tabular-nums">
                         ₱{fmt(tx.passway ?? 0)}
@@ -1698,6 +1731,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                                   ? 'bg-blue-100 text-blue-700'
                                   : tx.payment_mode === 'BANK_TRANSFER'
                                     ? 'bg-violet-100 text-violet-700'
+                                    : tx.payment_mode === 'CUSTOMER_CREDIT'
+                                      ? 'bg-teal-100 text-teal-700'
                                     : tx.payment_mode === 'OFFSET'
                                       ? 'bg-pink-100 text-pink-700'
                                         : tx.payment_mode === 'DONATION'
@@ -1709,6 +1744,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                         >
                           {tx.payment_mode === 'BANK_TRANSFER'
                             ? 'BANK'
+                            : tx.payment_mode === 'CUSTOMER_CREDIT'
+                              ? 'CREDIT'
                             : tx.payment_mode === 'DONATION'
                               ? 'DONATE'
                             : tx.payment_mode || '—'}
@@ -1871,7 +1908,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
-              { label: 'Revenue', value: `₱${fmt(grandTotalWithFees)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
+              { label: 'Revenue', value: `₱${fmt(grandNetSales)}`, icon: <DollarSign size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
               { label: 'Expenses', value: `₱${fmt(totalExpenses)}`, icon: <Banknote size={18} className="text-red-500" />, bg: 'bg-red-50' },
               { label: 'Net Income', value: `₱${fmt(netIncome)}`, icon: <TrendingUp size={18} className={netIncome >= 0 ? 'text-emerald-500' : 'text-red-500'} />, bg: netIncome >= 0 ? 'bg-emerald-50' : 'bg-red-50' },
               { label: 'Tracked Periods', value: String(netIncomeList.length), icon: <Calendar size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
@@ -1888,7 +1925,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
             <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2 bg-white rounded-xl border border-slate-200">
               <RefreshCw size={16} className="animate-spin" /> Loading net income report...
             </div>
-          ) : grandTotalWithFees === 0 && totalExpenses === 0 ? (
+          ) : grandNetSales === 0 && totalExpenses === 0 ? (
             <div className="py-16 text-center bg-white rounded-xl border border-slate-200">
               <Banknote size={32} className="text-slate-300 mx-auto mb-3" />
               <p className="text-slate-500 text-sm">No revenue or expenses in selected range</p>
@@ -1899,7 +1936,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                 <FinancialStatementTable
                   title="Revenue Line Items"
                   rows={revenueLineItems}
-                  total={grandTotalWithFees}
+                  total={grandNetSales}
                   totalLabel="Total Revenue"
                   tone="revenue"
                 />
@@ -1923,7 +1960,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                       <p className={`text-2xl font-bold tabular-nums ${netIncome >= 0 ? 'text-slate-900' : 'text-red-600'}`}>₱{fmt(netIncome)}</p>
                     </div>
                   </div>
-                  <FormulaAmount label="Revenue" value={grandTotalWithFees} tone="revenue" />
+                  <FormulaAmount label="Revenue" value={grandNetSales} tone="revenue" />
                   <FormulaAmount label="Expenses" value={totalExpenses} tone="expense" prefix="-" />
                   <FormulaAmount label="Net Income" value={netIncome} tone={netIncome >= 0 ? 'net' : 'expense'} prefix="=" />
                 </div>

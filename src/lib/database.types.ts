@@ -34,6 +34,7 @@ export type ActivityCode =
   | 'FUEL_ISSUANCE_ADD'
   | 'FUEL_ADJUST'
   | 'FUEL_EXPORT'
+  | 'FUEL_EQUIPMENT_MANAGE'
   | 'HAULER_OFFSET_LEDGER_VIEW'
   | 'HAULER_OFFSET_LEDGER_ADD'
   | 'HAULER_OFFSET_LEDGER_EXPORT'
@@ -45,6 +46,11 @@ export type ActivityCode =
   | 'CUSTOMER_CREDIT_ADD'
   | 'CUSTOMER_CREDIT_ADJUST'
   | 'CUSTOMER_CREDIT_EXPORT'
+  | 'SC_OPERATIONS_VIEW'
+  | 'SC_OPERATIONS_ADD'
+  | 'SC_OPERATIONS_EDIT'
+  | 'SC_OPERATIONS_DELETE'
+  | 'SC_OPERATIONS_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -722,6 +728,53 @@ export type Database = {
         };
         Relationships: [];
       };
+      company_equipment: {
+        Row: {
+          id: string;
+          branch_id: string | null;
+          name: string;
+          equipment_type: string;
+          plate_or_code: string;
+          operator_name: string;
+          notes: string;
+          is_active: boolean;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          branch_id?: string | null;
+          name: string;
+          equipment_type?: string;
+          plate_or_code?: string;
+          operator_name?: string;
+          notes?: string;
+          is_active?: boolean;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          branch_id?: string | null;
+          name?: string;
+          equipment_type?: string;
+          plate_or_code?: string;
+          operator_name?: string;
+          notes?: string;
+          is_active?: boolean;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'company_equipment_branch_id_fkey';
+            columns: ['branch_id'];
+            referencedRelation: 'fuel_branches';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       fuel_inventory_state: {
         Row: {
           id: string;
@@ -813,6 +866,7 @@ export type Database = {
           category: string;
           issued_to: string;
           truck_id: string | null;
+          company_equipment_id: string | null;
           reference_no: string;
           liters: number;
           unit_cost_snapshot: number;
@@ -829,6 +883,7 @@ export type Database = {
           category: string;
           issued_to: string;
           truck_id?: string | null;
+          company_equipment_id?: string | null;
           reference_no?: string;
           liters: number;
           unit_cost_snapshot: number;
@@ -844,6 +899,7 @@ export type Database = {
           category?: string;
           issued_to?: string;
           truck_id?: string | null;
+          company_equipment_id?: string | null;
           reference_no?: string;
           liters?: number;
           unit_cost_snapshot?: number;
@@ -863,6 +919,12 @@ export type Database = {
             foreignKeyName: 'fuel_issuances_truck_id_fkey';
             columns: ['truck_id'];
             referencedRelation: 'trucks';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'fuel_issuances_company_equipment_id_fkey';
+            columns: ['company_equipment_id'];
+            referencedRelation: 'company_equipment';
             referencedColumns: ['id'];
           },
         ];
@@ -934,6 +996,123 @@ export type Database = {
             foreignKeyName: 'fuel_inventory_ledger_reversal_of_ledger_id_fkey';
             columns: ['reversal_of_ledger_id'];
             referencedRelation: 'fuel_inventory_ledger';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      stone_crusher_monthly_targets: {
+        Row: {
+          id: string;
+          target_month: string;
+          target_hours: number;
+          effective_date: string;
+          remarks: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          target_month: string;
+          target_hours?: number;
+          effective_date: string;
+          remarks?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          target_month?: string;
+          target_hours?: number;
+          effective_date?: string;
+          remarks?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      stone_crusher_daily_entries: {
+        Row: {
+          id: string;
+          entry_date: string;
+          operation_minutes: number;
+          downtime_minutes: number;
+          time_schedule: string;
+          breakdown: string;
+          monthly_target_id: string | null;
+          jaw_1_dumps: number;
+          jaw_2_dumps: number;
+          genset_used: string;
+          genset_1_liters: number;
+          genset_2_liters: number;
+          genset_4_liters: number;
+          water_pump_genset_liters: number;
+          genset_1_running_minutes: number;
+          genset_2_running_minutes: number;
+          genset_4_running_minutes: number;
+          operation_hours: number;
+          downtime_hours: number;
+          total_dumps: number;
+          genset_diesel_consumption: number;
+          g1_output: number;
+          three_fourth_output: number;
+          s_three_fourth_output: number;
+          total_output: number;
+          plant_capacity_tph: number;
+          notes: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          entry_date: string;
+          operation_minutes?: number;
+          downtime_minutes?: number;
+          time_schedule?: string;
+          breakdown?: string;
+          monthly_target_id?: string | null;
+          jaw_1_dumps?: number;
+          jaw_2_dumps?: number;
+          genset_used?: string;
+          genset_1_liters?: number;
+          genset_2_liters?: number;
+          genset_4_liters?: number;
+          water_pump_genset_liters?: number;
+          genset_1_running_minutes?: number;
+          genset_2_running_minutes?: number;
+          genset_4_running_minutes?: number;
+          notes?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          entry_date?: string;
+          operation_minutes?: number;
+          downtime_minutes?: number;
+          time_schedule?: string;
+          breakdown?: string;
+          monthly_target_id?: string | null;
+          jaw_1_dumps?: number;
+          jaw_2_dumps?: number;
+          genset_used?: string;
+          genset_1_liters?: number;
+          genset_2_liters?: number;
+          genset_4_liters?: number;
+          water_pump_genset_liters?: number;
+          genset_1_running_minutes?: number;
+          genset_2_running_minutes?: number;
+          genset_4_running_minutes?: number;
+          notes?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'stone_crusher_daily_entries_monthly_target_id_fkey';
+            columns: ['monthly_target_id'];
+            referencedRelation: 'stone_crusher_monthly_targets';
             referencedColumns: ['id'];
           },
         ];
@@ -1120,6 +1299,7 @@ export type Database = {
           p_reference_no: string;
           p_liters: number;
           p_remarks?: string;
+          p_company_equipment_id?: string | null;
         };
         Returns: Database['public']['Tables']['fuel_issuances']['Row'];
       };
@@ -1166,11 +1346,14 @@ export type HaulerOffsetLedgerRow = Database['public']['Functions']['get_hauler_
 export type CustomerCreditEntry = Database['public']['Tables']['customer_credit_entries']['Row'];
 export type CustomerCreditLedgerRow = Database['public']['Functions']['get_customer_credit_ledger']['Returns'][number];
 export type FuelBranch = Database['public']['Tables']['fuel_branches']['Row'];
+export type CompanyEquipment = Database['public']['Tables']['company_equipment']['Row'];
 export type FuelInventoryState = Database['public']['Tables']['fuel_inventory_state']['Row'];
 export type FuelPurchase = Database['public']['Tables']['fuel_purchases']['Row'];
 export type FuelIssuance = Database['public']['Tables']['fuel_issuances']['Row'];
 export type FuelInventoryLedger = Database['public']['Tables']['fuel_inventory_ledger']['Row'];
 export type CustomerCreditSettlement = Database['public']['Tables']['customer_credit_settlements']['Row'];
+export type StoneCrusherMonthlyTarget = Database['public']['Tables']['stone_crusher_monthly_targets']['Row'];
+export type StoneCrusherDailyEntry = Database['public']['Tables']['stone_crusher_daily_entries']['Row'];
 
 export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
   old_data: Record<string, unknown> | null;

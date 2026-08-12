@@ -937,7 +937,7 @@ export default function HaulerOffsetLedger({
     }
 
     const lines = [
-      ['Hauler Offset Ledger'],
+      ['Accounts Ledger'],
       [`Hauler: ${selectedHauler?.name ?? '—'}`],
       [`Period: ${formatDate(dateFrom)} to ${formatDate(dateTo)}`],
       [`Generated: ${new Date().toLocaleString('en-PH')}`],
@@ -962,7 +962,7 @@ export default function HaulerOffsetLedger({
       ['Closing Balance', '', '', '', '', '', fmt(closingBalance)],
     ];
     const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
-    downloadTextFile(`hauler-offset-ledger-${slugify(selectedHauler?.name ?? 'hauler')}-${dateFrom}-${dateTo}.csv`, csv, 'text/csv;charset=utf-8');
+    downloadTextFile(`accounts-ledger-${slugify(selectedHauler?.name ?? 'hauler')}-${dateFrom}-${dateTo}.csv`, csv, 'text/csv;charset=utf-8');
   }
 
   function exportCustomerExcel() {
@@ -1149,8 +1149,8 @@ export default function HaulerOffsetLedger({
               <ReceiptText size={22} />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-800">Offset Ledger</h1>
-              <p className="text-slate-500 text-sm mt-0.5">Track hauler balances separately from customer offset activity.</p>
+              <h1 className="text-2xl font-bold text-slate-800">Accounts Ledger</h1>
+              <p className="text-slate-500 text-sm mt-0.5">Track hauler and customer account balances in one ledger workspace.</p>
             </div>
           </div>
         </div>

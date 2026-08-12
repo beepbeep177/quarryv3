@@ -9,13 +9,16 @@ import {
   Fuel,
   History,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   Truck,
+  Wrench,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { FuelBranch, FuelInventoryLedger, FuelInventoryState, FuelIssuance, FuelPurchase, Truck as TruckType } from '../lib/database.types';
+import type { CompanyEquipment, FuelBranch, FuelInventoryLedger, FuelInventoryState, FuelIssuance, FuelPurchase, Truck as TruckType } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
@@ -23,15 +26,32 @@ import ReadOnlyNotice from './ReadOnlyNotice';
 const PAGE_SIZE = 8;
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 const issueCategories = ['Hauler Offset', 'Company Equipment', 'Company Truck', 'Parts / Errand', 'Owner / Personal'];
+const equipmentTypes = ['Loader', 'Backhoe', 'Car', 'Service Vehicle', 'Generator', 'Other'];
+const CATEGORY_HAULER_OFFSET = 'Hauler Offset';
+const CATEGORY_COMPANY_EQUIPMENT = 'Company Equipment';
+const CATEGORY_COMPANY_TRUCK = 'Company Truck';
 
-type FuelTab = 'overview' | 'purchases' | 'issuances' | 'history';
-type FuelIssuanceWithTruck = FuelIssuance & { trucks?: TruckType | null };
+type FuelTab = 'overview' | 'purchases' | 'issuances' | 'equipment' | 'history';
+type FuelIssuanceWithTarget = FuelIssuance & {
+  trucks?: TruckType | null;
+  company_equipment?: CompanyEquipment | null;
+};
 
 interface FuelManagementProps {
   canAddPurchase?: boolean;
   canIssue?: boolean;
   canAdjust?: boolean;
   canExport?: boolean;
+  canManageEquipment?: boolean;
+}
+
+interface EquipmentFormState {
+  branch_id: string;
+  name: string;
+  equipment_type: string;
+  plate_or_code: string;
+  operator_name: string;
+  notes: string;
 }
 
 function todayInput() {
@@ -83,6 +103,24 @@ function formatDate(value: string) {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+function formatTruckTarget(truck: TruckType) {
+  return `${truck.plate_number}${truck.driver_name ? ` - ${truck.driver_name}` : ''}`;
+}
+
+function formatEquipmentTarget(equipment: CompanyEquipment) {
+  return [
+    equipment.name,
+    equipment.plate_or_code ? `/ ${equipment.plate_or_code}` : '',
+    equipment.operator_name ? `(${equipment.operator_name})` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function equipmentBranchLabel(equipment: CompanyEquipment, branches: FuelBranch[]) {
+  if (!equipment.branch_id) return 'All branches';
+  const branch = branches.find(item => item.id === equipment.branch_id);
+  return branch ? `${branch.company_name} - ${branch.name}` : 'Assigned branch';
 }
 
 function movementBadge(type: FuelInventoryLedger['movement_type']) {
@@ -140,21 +178,25 @@ export default function FuelManagement({
   canIssue = false,
   canAdjust = false,
   canExport = false,
+  canManageEquipment = false,
 }: FuelManagementProps) {
   const [activeTab, setActiveTab] = useState<FuelTab>('overview');
   const [branches, setBranches] = useState<FuelBranch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState('ALL');
   const [states, setStates] = useState<FuelInventoryState[]>([]);
   const [purchases, setPurchases] = useState<FuelPurchase[]>([]);
-  const [issuances, setIssuances] = useState<FuelIssuanceWithTruck[]>([]);
+  const [issuances, setIssuances] = useState<FuelIssuanceWithTarget[]>([]);
   const [ledger, setLedger] = useState<FuelInventoryLedger[]>([]);
   const [haulerTrucks, setHaulerTrucks] = useState<TruckType[]>([]);
+  const [companyTrucks, setCompanyTrucks] = useState<TruckType[]>([]);
+  const [companyEquipment, setCompanyEquipment] = useState<CompanyEquipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [purchasePage, setPurchasePage] = useState(1);
   const [issuancePage, setIssuancePage] = useState(1);
+  const [equipmentPage, setEquipmentPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
 
   const [purchaseForm, setPurchaseForm] = useState({
@@ -170,10 +212,29 @@ export default function FuelManagement({
     category: issueCategories[0],
     issued_to: '',
     truck_id: '',
+    company_equipment_id: '',
     reference_no: '',
     liters: '',
     remarks: '',
   });
+  const [equipmentForm, setEquipmentForm] = useState<EquipmentFormState>({
+    branch_id: '',
+    name: '',
+    equipment_type: equipmentTypes[0],
+    plate_or_code: '',
+    operator_name: '',
+    notes: '',
+  });
+  const [editingEquipment, setEditingEquipment] = useState<CompanyEquipment | null>(null);
+  const [editEquipmentForm, setEditEquipmentForm] = useState<EquipmentFormState>({
+    branch_id: '',
+    name: '',
+    equipment_type: equipmentTypes[0],
+    plate_or_code: '',
+    operator_name: '',
+    notes: '',
+  });
+  const [equipmentSaving, setEquipmentSaving] = useState(false);
   const [adjustmentForm, setAdjustmentForm] = useState({
     movement_date: todayInput(),
     liters_delta: '',
@@ -209,7 +270,7 @@ export default function FuelManagement({
 
     let issuanceQuery = supabase
       .from('fuel_issuances')
-      .select('*, trucks(*)')
+      .select('*, trucks(*), company_equipment(*)')
       .order('issuance_date', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -228,27 +289,36 @@ export default function FuelManagement({
     const truckQuery = supabase
       .from('trucks')
       .select('*')
-      .eq('is_hauler', true)
       .order('plate_number');
+    const equipmentQuery = supabase
+      .from('company_equipment')
+      .select('*')
+      .eq('is_active', true)
+      .order('equipment_type')
+      .order('name');
 
-    const [branchResult, stateResult, purchaseResult, issuanceResult, ledgerResult, truckResult] = await Promise.all([
+    const [branchResult, stateResult, purchaseResult, issuanceResult, ledgerResult, truckResult, equipmentResult] = await Promise.all([
       branchQuery,
       stateQuery,
       purchaseQuery,
       issuanceQuery,
       ledgerQuery,
       truckQuery,
+      equipmentQuery,
     ]);
 
-    const firstError = branchResult.error || stateResult.error || purchaseResult.error || issuanceResult.error || ledgerResult.error || truckResult.error;
+    const firstError = branchResult.error || stateResult.error || purchaseResult.error || issuanceResult.error || ledgerResult.error || truckResult.error || equipmentResult.error;
     if (firstError) setError(firstError.message);
 
+    const truckRows = (truckResult.data ?? []) as TruckType[];
     setBranches((branchResult.data ?? []) as FuelBranch[]);
     setStates((stateResult.data ?? []) as FuelInventoryState[]);
     setPurchases((purchaseResult.data ?? []) as FuelPurchase[]);
-    setIssuances((issuanceResult.data ?? []) as FuelIssuanceWithTruck[]);
+    setIssuances((issuanceResult.data ?? []) as FuelIssuanceWithTarget[]);
     setLedger((ledgerResult.data ?? []) as FuelInventoryLedger[]);
-    setHaulerTrucks((truckResult.data ?? []) as TruckType[]);
+    setHaulerTrucks(truckRows.filter(truck => truck.is_hauler));
+    setCompanyTrucks(truckRows.filter(truck => !truck.is_hauler));
+    setCompanyEquipment((equipmentResult.data ?? []) as CompanyEquipment[]);
     setLoading(false);
   }, [selectedBranchId]);
 
@@ -257,8 +327,13 @@ export default function FuelManagement({
   }, [fetchFuelData]);
 
   useEffect(() => {
+    setEquipmentForm(form => form.branch_id ? form : { ...form, branch_id: actionBranchId });
+  }, [actionBranchId]);
+
+  useEffect(() => {
     setPurchasePage(1);
     setIssuancePage(1);
+    setEquipmentPage(1);
     setHistoryPage(1);
   }, [search, selectedBranchId, activeTab]);
 
@@ -279,9 +354,30 @@ export default function FuelManagement({
       item.category.toLowerCase().includes(q) ||
       item.issued_to.toLowerCase().includes(q) ||
       item.reference_no.toLowerCase().includes(q) ||
-      (item.trucks?.plate_number ?? '').toLowerCase().includes(q)
+      (item.trucks?.plate_number ?? '').toLowerCase().includes(q) ||
+      (item.company_equipment?.name ?? '').toLowerCase().includes(q) ||
+      (item.company_equipment?.plate_or_code ?? '').toLowerCase().includes(q)
     );
   }, [issuances, search]);
+
+  const visibleCompanyEquipment = useMemo(() => {
+    const scoped = companyEquipment.filter(item =>
+      selectedBranchId === 'ALL' || !item.branch_id || item.branch_id === selectedBranchId
+    );
+    const q = search.trim().toLowerCase();
+    if (!q || activeTab !== 'equipment') return scoped;
+    return scoped.filter(item =>
+      item.name.toLowerCase().includes(q) ||
+      item.equipment_type.toLowerCase().includes(q) ||
+      item.plate_or_code.toLowerCase().includes(q) ||
+      item.operator_name.toLowerCase().includes(q) ||
+      equipmentBranchLabel(item, branches).toLowerCase().includes(q)
+    );
+  }, [activeTab, branches, companyEquipment, search, selectedBranchId]);
+
+  const availableCompanyEquipment = useMemo(() => (
+    companyEquipment.filter(item => !item.branch_id || !actionBranchId || item.branch_id === actionBranchId)
+  ), [actionBranchId, companyEquipment]);
 
   const filteredLedger = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -364,8 +460,16 @@ export default function FuelManagement({
   async function handleIssuanceSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!actionBranchId) return;
-    if (issuanceForm.category === 'Hauler Offset' && !issuanceForm.truck_id) {
+    if (issuanceForm.category === CATEGORY_HAULER_OFFSET && !issuanceForm.truck_id) {
       setError('Select a hauler truck before saving a Hauler Offset fuel issuance.');
+      return;
+    }
+    if (issuanceForm.category === CATEGORY_COMPANY_TRUCK && !issuanceForm.truck_id) {
+      setError('Select a company truck before saving this fuel issuance.');
+      return;
+    }
+    if (issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT && !issuanceForm.company_equipment_id) {
+      setError('Select company equipment before saving this fuel issuance.');
       return;
     }
     setSaving(true);
@@ -375,10 +479,15 @@ export default function FuelManagement({
       p_issuance_date: issuanceForm.issuance_date,
       p_category: issuanceForm.category,
       p_issued_to: issuanceForm.issued_to.trim(),
-      p_truck_id: issuanceForm.truck_id || null,
+      p_truck_id: issuanceForm.category === CATEGORY_HAULER_OFFSET || issuanceForm.category === CATEGORY_COMPANY_TRUCK
+        ? issuanceForm.truck_id || null
+        : null,
       p_reference_no: issuanceForm.reference_no.trim(),
       p_liters: Number(issuanceForm.liters),
       p_remarks: issuanceForm.remarks.trim(),
+      p_company_equipment_id: issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT
+        ? issuanceForm.company_equipment_id || null
+        : null,
     });
     setSaving(false);
 
@@ -387,7 +496,7 @@ export default function FuelManagement({
       return;
     }
 
-    setIssuanceForm({ issuance_date: todayInput(), category: issueCategories[0], issued_to: '', truck_id: '', reference_no: '', liters: '', remarks: '' });
+    setIssuanceForm({ issuance_date: todayInput(), category: issueCategories[0], issued_to: '', truck_id: '', company_equipment_id: '', reference_no: '', liters: '', remarks: '' });
     await fetchFuelData();
   }
 
@@ -434,13 +543,121 @@ export default function FuelManagement({
     await fetchFuelData();
   }
 
-  function handleTruckPick(truckId: string) {
-    const truck = haulerTrucks.find(item => item.id === truckId);
+  function handleIssuanceCategoryChange(category: string) {
+    setError('');
+    setIssuanceForm(form => ({
+      ...form,
+      category,
+      issued_to: '',
+      truck_id: '',
+      company_equipment_id: '',
+    }));
+  }
+
+  function handleTruckPick(truckId: string, source: 'hauler' | 'company') {
+    const trucks = source === 'hauler' ? haulerTrucks : companyTrucks;
+    const truck = trucks.find(item => item.id === truckId);
     setIssuanceForm(form => ({
       ...form,
       truck_id: truckId,
-      issued_to: truck ? `${truck.plate_number}${truck.driver_name ? ` - ${truck.driver_name}` : ''}` : form.issued_to,
+      company_equipment_id: '',
+      issued_to: truck ? formatTruckTarget(truck) : '',
     }));
+  }
+
+  function handleEquipmentPick(equipmentId: string) {
+    const equipment = availableCompanyEquipment.find(item => item.id === equipmentId);
+    setIssuanceForm(form => ({
+      ...form,
+      truck_id: '',
+      company_equipment_id: equipmentId,
+      issued_to: equipment ? formatEquipmentTarget(equipment) : '',
+    }));
+  }
+
+  async function handleEquipmentSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canManageEquipment || !equipmentForm.name.trim()) return;
+    setEquipmentSaving(true);
+    setError('');
+
+    const { error: saveError } = await supabase.from('company_equipment').insert({
+      branch_id: equipmentForm.branch_id || null,
+      name: equipmentForm.name.trim(),
+      equipment_type: equipmentForm.equipment_type.trim() || 'Other',
+      plate_or_code: equipmentForm.plate_or_code.trim(),
+      operator_name: equipmentForm.operator_name.trim(),
+      notes: equipmentForm.notes.trim(),
+      is_active: true,
+    });
+    setEquipmentSaving(false);
+
+    if (saveError) {
+      setError(saveError.message);
+      return;
+    }
+
+    setEquipmentForm({ branch_id: actionBranchId, name: '', equipment_type: equipmentTypes[0], plate_or_code: '', operator_name: '', notes: '' });
+    await fetchFuelData();
+  }
+
+  function startEquipmentEdit(item: CompanyEquipment) {
+    setEditingEquipment(item);
+    setEditEquipmentForm({
+      branch_id: item.branch_id ?? '',
+      name: item.name,
+      equipment_type: item.equipment_type,
+      plate_or_code: item.plate_or_code,
+      operator_name: item.operator_name,
+      notes: item.notes,
+    });
+  }
+
+  async function handleEquipmentEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canManageEquipment || !editingEquipment || !editEquipmentForm.name.trim()) return;
+    setEquipmentSaving(true);
+    setError('');
+
+    const { error: saveError } = await supabase
+      .from('company_equipment')
+      .update({
+        branch_id: editEquipmentForm.branch_id || null,
+        name: editEquipmentForm.name.trim(),
+        equipment_type: editEquipmentForm.equipment_type.trim() || 'Other',
+        plate_or_code: editEquipmentForm.plate_or_code.trim(),
+        operator_name: editEquipmentForm.operator_name.trim(),
+        notes: editEquipmentForm.notes.trim(),
+      })
+      .eq('id', editingEquipment.id);
+    setEquipmentSaving(false);
+
+    if (saveError) {
+      setError(saveError.message);
+      return;
+    }
+
+    setEditingEquipment(null);
+    await fetchFuelData();
+  }
+
+  async function deactivateEquipment(item: CompanyEquipment) {
+    if (!canManageEquipment || !confirm(`Deactivate ${item.name}?`)) return;
+    setEquipmentSaving(true);
+    setError('');
+
+    const { error: saveError } = await supabase
+      .from('company_equipment')
+      .update({ is_active: false })
+      .eq('id', item.id);
+    setEquipmentSaving(false);
+
+    if (saveError) {
+      setError(saveError.message);
+      return;
+    }
+
+    await fetchFuelData();
   }
 
   function exportRows() {
@@ -456,8 +673,16 @@ export default function FuelManagement({
       return {
         title: 'Fuel Issuances',
         filename: 'fuel-issuances',
-        headers: ['Date', 'Category', 'Issued To', 'Truck', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Remarks'],
-        rows: filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), item.remarks]),
+        headers: ['Date', 'Category', 'Issued To', 'Truck', 'Equipment', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Remarks'],
+        rows: filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), item.remarks]),
+      };
+    }
+    if (activeTab === 'equipment') {
+      return {
+        title: 'Company Equipment',
+        filename: 'company-equipment',
+        headers: ['Name', 'Type', 'Code / Plate', 'Operator', 'Branch', 'Notes'],
+        rows: visibleCompanyEquipment.map(item => [item.name, item.equipment_type, item.plate_or_code, item.operator_name, equipmentBranchLabel(item, branches), item.notes]),
       };
     }
     return {
@@ -525,15 +750,22 @@ export default function FuelManagement({
 
   const pagedPurchases = useMemo(() => paginate(filteredPurchases, Math.min(purchasePage, Math.max(1, Math.ceil(filteredPurchases.length / PAGE_SIZE))), PAGE_SIZE), [filteredPurchases, purchasePage]);
   const pagedIssuances = useMemo(() => paginate(filteredIssuances, Math.min(issuancePage, Math.max(1, Math.ceil(filteredIssuances.length / PAGE_SIZE))), PAGE_SIZE), [filteredIssuances, issuancePage]);
+  const pagedEquipment = useMemo(() => paginate(visibleCompanyEquipment, Math.min(equipmentPage, Math.max(1, Math.ceil(visibleCompanyEquipment.length / PAGE_SIZE))), PAGE_SIZE), [equipmentPage, visibleCompanyEquipment]);
   const pagedLedger = useMemo(() => paginate(filteredLedger, Math.min(historyPage, Math.max(1, Math.ceil(filteredLedger.length / PAGE_SIZE))), PAGE_SIZE), [filteredLedger, historyPage]);
   const purchaseCurrentPage = Math.min(purchasePage, Math.max(1, Math.ceil(filteredPurchases.length / PAGE_SIZE)));
   const issuanceCurrentPage = Math.min(issuancePage, Math.max(1, Math.ceil(filteredIssuances.length / PAGE_SIZE)));
+  const equipmentCurrentPage = Math.min(equipmentPage, Math.max(1, Math.ceil(visibleCompanyEquipment.length / PAGE_SIZE)));
   const historyCurrentPage = Math.min(historyPage, Math.max(1, Math.ceil(filteredLedger.length / PAGE_SIZE)));
+  const isHaulerOffsetIssue = issuanceForm.category === CATEGORY_HAULER_OFFSET;
+  const isCompanyTruckIssue = issuanceForm.category === CATEGORY_COMPANY_TRUCK;
+  const isCompanyEquipmentIssue = issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT;
+  const usesStructuredIssuanceTarget = isHaulerOffsetIssue || isCompanyTruckIssue || isCompanyEquipmentIssue;
 
   const tabs: { id: FuelTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'purchases', label: 'Fuel Purchases' },
     { id: 'issuances', label: 'Fuel Issuances' },
+    { id: 'equipment', label: 'Company Equipment' },
     { id: 'history', label: 'Inventory History' },
   ];
 
@@ -568,7 +800,7 @@ export default function FuelManagement({
         </div>
       </div>
 
-      {!canAddPurchase && !canIssue && !canAdjust && <ReadOnlyNotice message="This user group can review fuel records only." />}
+      {!canAddPurchase && !canIssue && !canAdjust && !canManageEquipment && <ReadOnlyNotice message="This user group can review fuel records only." />}
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -701,17 +933,48 @@ export default function FuelManagement({
                   <form onSubmit={handleIssuanceSubmit} className="space-y-4">
                     <Field label="Date"><input required type="date" value={issuanceForm.issuance_date} onChange={e => setIssuanceForm(f => ({ ...f, issuance_date: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Category">
-                      <select value={issuanceForm.category} onChange={e => setIssuanceForm(f => ({ ...f, category: e.target.value }))} className={inputClass}>
+                      <select value={issuanceForm.category} onChange={e => handleIssuanceCategoryChange(e.target.value)} className={inputClass}>
                         {issueCategories.map(category => <option key={category} value={category}>{category}</option>)}
                       </select>
                     </Field>
-                    <Field label="Hauler Truck">
-                      <select value={issuanceForm.truck_id} onChange={e => handleTruckPick(e.target.value)} className={inputClass}>
-                        <option value="">No truck selected</option>
-                        {haulerTrucks.map(truck => <option key={truck.id} value={truck.id}>{truck.plate_number} - {truck.driver_name || 'No driver'}</option>)}
-                      </select>
+                    {isHaulerOffsetIssue && (
+                      <Field label="Hauler Truck">
+                        <select required value={issuanceForm.truck_id} onChange={e => handleTruckPick(e.target.value, 'hauler')} className={inputClass}>
+                          <option value="">Select hauler truck...</option>
+                          {haulerTrucks.map(truck => <option key={truck.id} value={truck.id}>{truck.plate_number} - {truck.driver_name || 'No driver'}</option>)}
+                        </select>
+                      </Field>
+                    )}
+                    {isCompanyTruckIssue && (
+                      <Field label="Company Truck">
+                        <select required value={issuanceForm.truck_id} onChange={e => handleTruckPick(e.target.value, 'company')} className={inputClass}>
+                          <option value="">Select company truck...</option>
+                          {companyTrucks.map(truck => <option key={truck.id} value={truck.id}>{truck.plate_number} - {truck.driver_name || 'No driver'}</option>)}
+                        </select>
+                      </Field>
+                    )}
+                    {isCompanyEquipmentIssue && (
+                      <Field label="Company Equipment">
+                        <select required value={issuanceForm.company_equipment_id} onChange={e => handleEquipmentPick(e.target.value)} className={inputClass}>
+                          <option value="">{availableCompanyEquipment.length === 0 ? 'No equipment available' : 'Select equipment...'}</option>
+                          {availableCompanyEquipment.map(equipment => (
+                            <option key={equipment.id} value={equipment.id}>
+                              {equipment.equipment_type} - {formatEquipmentTarget(equipment)}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                    <Field label="Issued To">
+                      <input
+                        required
+                        value={issuanceForm.issued_to}
+                        readOnly={usesStructuredIssuanceTarget}
+                        onChange={e => setIssuanceForm(f => ({ ...f, issued_to: e.target.value }))}
+                        className={`${inputClass} ${usesStructuredIssuanceTarget ? 'bg-slate-50 text-slate-500' : ''}`}
+                        placeholder={usesStructuredIssuanceTarget ? 'Auto-filled from selected target' : 'Javi / Site Errand'}
+                      />
                     </Field>
-                    <Field label="Issued To"><input required value={issuanceForm.issued_to} onChange={e => setIssuanceForm(f => ({ ...f, issued_to: e.target.value }))} className={inputClass} placeholder="Apex Hauling / Loader WA380" /></Field>
                     <Field label="Reference"><input value={issuanceForm.reference_no} onChange={e => setIssuanceForm(f => ({ ...f, reference_no: e.target.value }))} className={inputClass} placeholder="FI-2026-0702-015" /></Field>
                     <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={issuanceForm.liters} onChange={e => setIssuanceForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Remarks"><textarea value={issuanceForm.remarks} onChange={e => setIssuanceForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
@@ -725,6 +988,53 @@ export default function FuelManagement({
               <div className={canIssue ? 'xl:col-span-2' : 'xl:col-span-3'}>
                 <IssuancesTable rows={pagedIssuances} />
                 <Pagination page={issuanceCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredIssuances.length} onPageChange={setIssuancePage} />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'equipment' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+              {canManageEquipment && (
+                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
+                  <h2 className="font-semibold text-slate-800 mb-4">Add Company Equipment</h2>
+                  <form onSubmit={handleEquipmentSubmit} className="space-y-4">
+                    <Field label="Branch / Company">
+                      <select value={equipmentForm.branch_id} onChange={e => setEquipmentForm(f => ({ ...f, branch_id: e.target.value }))} className={inputClass}>
+                        <option value="">All branches</option>
+                        {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.company_name} - {branch.name}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Equipment Name"><input required value={equipmentForm.name} onChange={e => setEquipmentForm(f => ({ ...f, name: e.target.value }))} className={inputClass} placeholder="Loader WA380" /></Field>
+                    <Field label="Type">
+                      <select value={equipmentForm.equipment_type} onChange={e => setEquipmentForm(f => ({ ...f, equipment_type: e.target.value }))} className={inputClass}>
+                        {equipmentTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Code / Plate"><input value={equipmentForm.plate_or_code} onChange={e => setEquipmentForm(f => ({ ...f, plate_or_code: e.target.value }))} className={inputClass} placeholder="WA380" /></Field>
+                    <Field label="Operator"><input value={equipmentForm.operator_name} onChange={e => setEquipmentForm(f => ({ ...f, operator_name: e.target.value }))} className={inputClass} placeholder="Operator name" /></Field>
+                    <Field label="Notes"><textarea value={equipmentForm.notes} onChange={e => setEquipmentForm(f => ({ ...f, notes: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
+                    <button disabled={equipmentSaving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
+                      {equipmentSaving ? <Loader2 size={15} className="animate-spin" /> : <Wrench size={15} />}
+                      Save Equipment
+                    </button>
+                  </form>
+                </div>
+              )}
+              <div className={canManageEquipment ? 'xl:col-span-2' : 'xl:col-span-3'}>
+                <EquipmentTable
+                  rows={pagedEquipment}
+                  branches={branches}
+                  canManage={canManageEquipment}
+                  editingEquipment={editingEquipment}
+                  editForm={editEquipmentForm}
+                  setEditForm={setEditEquipmentForm}
+                  onStartEdit={startEquipmentEdit}
+                  onCancelEdit={() => setEditingEquipment(null)}
+                  onSubmitEdit={handleEquipmentEditSubmit}
+                  onDeactivate={deactivateEquipment}
+                  saving={equipmentSaving}
+                />
+                <Pagination page={equipmentCurrentPage} pageSize={PAGE_SIZE} totalItems={visibleCompanyEquipment.length} onPageChange={setEquipmentPage} />
               </div>
             </div>
           )}
@@ -774,7 +1084,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function RecentIssuances({ rows, onViewAll }: { rows: FuelIssuanceWithTruck[]; onViewAll: () => void }) {
+function RecentIssuances({ rows, onViewAll }: { rows: FuelIssuanceWithTarget[]; onViewAll: () => void }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -833,7 +1143,120 @@ function PurchasesTable({ rows, compact = false }: { rows: FuelPurchase[]; compa
   );
 }
 
-function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTruck[]; compact?: boolean }) {
+function EquipmentTable({
+  rows,
+  branches,
+  canManage,
+  editingEquipment,
+  editForm,
+  setEditForm,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  onDeactivate,
+  saving,
+}: {
+  rows: CompanyEquipment[];
+  branches: FuelBranch[];
+  canManage: boolean;
+  editingEquipment: CompanyEquipment | null;
+  editForm: EquipmentFormState;
+  setEditForm: React.Dispatch<React.SetStateAction<EquipmentFormState>>;
+  onStartEdit: (item: CompanyEquipment) => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (event: React.FormEvent) => void;
+  onDeactivate: (item: CompanyEquipment) => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+              <th className="px-5 py-3 text-left">Equipment</th>
+              <th className="px-4 py-3 text-left">Type</th>
+              <th className="px-4 py-3 text-left">Code / Plate</th>
+              <th className="px-4 py-3 text-left">Operator</th>
+              <th className="px-4 py-3 text-left">Branch</th>
+              {canManage && <th className="px-4 py-3 text-center w-24">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.length === 0 ? (
+              <tr><td colSpan={canManage ? 6 : 5} className="px-4 py-12 text-center text-slate-400">No company equipment found</td></tr>
+            ) : rows.map(item => (
+              editingEquipment?.id === item.id ? (
+                <tr key={item.id} className="bg-blue-50/60">
+                  <td className="px-5 py-3" colSpan={canManage ? 6 : 5}>
+                    <form onSubmit={onSubmitEdit} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+                      <div className="md:col-span-2">
+                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Name</label>
+                        <input required value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Type</label>
+                        <select value={editForm.equipment_type} onChange={e => setEditForm(f => ({ ...f, equipment_type: e.target.value }))} className={inputClass}>
+                          {equipmentTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Code / Plate</label>
+                        <input value={editForm.plate_or_code} onChange={e => setEditForm(f => ({ ...f, plate_or_code: e.target.value }))} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Operator</label>
+                        <input value={editForm.operator_name} onChange={e => setEditForm(f => ({ ...f, operator_name: e.target.value }))} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Branch</label>
+                        <select value={editForm.branch_id} onChange={e => setEditForm(f => ({ ...f, branch_id: e.target.value }))} className={inputClass}>
+                          <option value="">All branches</option>
+                          {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.company_name} - {branch.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="md:col-span-6 flex justify-end gap-2">
+                        <button type="button" onClick={onCancelEdit} className="px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50">Cancel</button>
+                        <button type="submit" disabled={saving} className="px-3 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-70">
+                          {saving ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={item.id} className="hover:bg-slate-50 group">
+                  <td className="px-5 py-3 text-slate-800 font-semibold">
+                    {item.name}
+                    {item.notes && <p className="text-xs text-slate-400 font-normal mt-0.5">{item.notes}</p>}
+                  </td>
+                  <td className="px-4 py-3"><span className="inline-flex px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-xs font-semibold">{item.equipment_type}</span></td>
+                  <td className="px-4 py-3 text-slate-600 font-mono text-xs">{item.plate_or_code || '—'}</td>
+                  <td className="px-4 py-3 text-slate-600">{item.operator_name || '—'}</td>
+                  <td className="px-4 py-3 text-slate-500">{equipmentBranchLabel(item, branches)}</td>
+                  {canManage && (
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => onStartEdit(item)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit equipment">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => onDeactivate(item)} disabled={saving} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Deactivate equipment">
+                          {saving ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              )
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTarget[]; compact?: boolean }) {
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -859,6 +1282,7 @@ function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTruck
                 <td className="px-4 py-3 text-slate-800 font-medium">
                   {item.issued_to}
                   {item.trucks?.plate_number && <p className="text-xs text-slate-400 font-mono">{item.trucks.plate_number}</p>}
+                  {item.company_equipment && <p className="text-xs text-slate-400">{item.company_equipment.equipment_type}{item.company_equipment.plate_or_code ? ` / ${item.company_equipment.plate_or_code}` : ''}</p>}
                 </td>
                 <td className="px-4 py-3 text-slate-500 font-mono text-xs">{item.reference_no || '—'}</td>
                 <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>

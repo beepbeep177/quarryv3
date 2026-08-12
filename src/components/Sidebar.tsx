@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Briefcase,
   ClipboardList,
   Users,
   Truck,
@@ -17,8 +18,10 @@ import {
   Banknote,
   ShieldCheck,
   Droplet,
+  Factory,
+  Settings,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ActivityCode } from '../lib/database.types';
 import type { NavSection } from '../types';
 
@@ -35,8 +38,25 @@ interface MenuItem {
   children?: { id: NavSection; label: string; icon: React.ReactNode }[];
 }
 
+type SidebarCategoryId = 'sales' | 'operations';
+
+interface MenuCategory {
+  id: SidebarCategoryId;
+  label: string;
+  icon: React.ReactNode;
+  items: MenuItem[];
+}
+
+function getOpenGroupForSection(section: NavSection) {
+  if (section.startsWith('daily')) return 'daily-view';
+  if (section.startsWith('customers')) return 'customers-list';
+  if (section.startsWith('logistics')) return 'logistics-trucks';
+  if (section.startsWith('operations')) return 'operations';
+  return null;
+}
+
 export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps) {
-  const menuItems = useMemo<MenuItem[]>(() => {
+  const salesItems = useMemo<MenuItem[]>(() => {
     const items: MenuItem[] = [];
 
     if (can('DASHBOARD_VIEW')) {
@@ -115,7 +135,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       items.push(
         {
           id: 'hauler-offset-ledger',
-          label: 'Hauler Offset Ledger',
+          label: 'Accounts Ledger',
           icon: <ReceiptText size={18} />,
         },
       );
@@ -144,30 +164,71 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
     return items;
   }, [can]);
 
-  const getDefaultOpen = () => {
-    const map: Record<string, boolean> = {
-      'daily-add': true,
-      'daily-view': true,
-      'customers-list': true,
-      'customers-ar': true,
-      'logistics-trucks': true,
-      'logistics-pricing': true,
-      'fuel-management': true,
-    };
-    return map[activeSection] ? activeSection.startsWith('daily') ? 'daily-view' :
-      activeSection.startsWith('customers') ? 'customers-list' : 'logistics-trucks' : null;
-  };
+  const operationsItems = useMemo<MenuItem[]>(() => {
+    const children = [
+      ...(can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
+        ? [{ id: 'operations-stone-crusher' as const, label: 'Stone Crusher', icon: <Factory size={15} /> }]
+        : []),
+    ];
 
-  const [openGroup, setOpenGroup] = useState<string | null>(getDefaultOpen);
+    return [
+      {
+        id: 'operations',
+        label: 'Daily Operations',
+        icon: <Settings size={18} />,
+        children,
+      },
+    ];
+  }, [can]);
+
+  const menuCategories = useMemo<MenuCategory[]>(() => {
+    const categories: MenuCategory[] = [
+      {
+        id: 'sales',
+        label: 'Sales',
+        icon: <Briefcase size={18} />,
+        items: salesItems,
+      },
+      {
+        id: 'operations',
+        label: 'Operations',
+        icon: <Settings size={18} />,
+        items: operationsItems,
+      },
+    ];
+
+    return categories.filter(category => category.items.length > 0);
+  }, [operationsItems, salesItems]);
+
+  const flatMenuItems = useMemo(
+    () => menuCategories.flatMap(category => category.items),
+    [menuCategories],
+  );
+
+  const [openCategory, setOpenCategory] = useState<SidebarCategoryId | null>(activeSection.startsWith('operations') ? 'operations' : 'sales');
+  const [openGroup, setOpenGroup] = useState<string | null>(() => getOpenGroupForSection(activeSection));
   const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setOpenCategory(activeSection.startsWith('operations') ? 'operations' : 'sales');
+    setOpenGroup(getOpenGroupForSection(activeSection));
+  }, [activeSection]);
 
   const isGroupActive = (item: MenuItem) => {
     if (!item.children) return activeSection === item.id;
     return item.children.some(c => c.id === activeSection);
   };
 
+  const isCategoryActive = (category: MenuCategory) => {
+    return category.items.some(item => isGroupActive(item));
+  };
+
   const toggleGroup = (id: string) => {
     setOpenGroup(prev => (prev === id ? null : id));
+  };
+
+  const toggleCategory = (id: SidebarCategoryId) => {
+    setOpenCategory(prev => (prev === id ? null : id));
   };
 
   const handleGroupClick = (item: MenuItem) => {
@@ -178,6 +239,73 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
 
     const activeChild = item.children?.find(child => child.id === activeSection);
     onNavigate(activeChild?.id ?? item.children?.[0]?.id ?? item.id);
+  };
+
+  const renderMenuItem = (item: MenuItem, nested = false) => {
+    const hasChildren = !!item.children;
+    const isOpen = !collapsed && openGroup === item.id;
+    const groupActive = isGroupActive(item);
+
+    if (!hasChildren) {
+      return (
+        <button
+          key={item.id}
+          onClick={() => onNavigate(item.id)}
+          title={collapsed ? item.label : undefined}
+          className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${nested ? 'py-2 rounded-md' : 'py-2.5 rounded-lg'} text-sm font-medium transition-colors ${
+            activeSection === item.id
+              ? 'bg-emerald-500/15 text-emerald-400'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <span className={activeSection === item.id ? 'text-emerald-400' : ''}>{item.icon}</span>
+          {!collapsed && item.label}
+        </button>
+      );
+    }
+
+    return (
+      <div key={item.id}>
+        <button
+          onClick={() => handleGroupClick(item)}
+          title={collapsed ? item.label : undefined}
+          className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${nested ? 'py-2 rounded-md' : 'py-2.5 rounded-lg'} text-sm font-medium transition-colors ${
+            groupActive
+              ? collapsed
+                ? 'bg-emerald-500/15 text-emerald-400'
+                : 'text-emerald-400'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <span className={groupActive ? 'text-emerald-400' : ''}>{item.icon}</span>
+          {!collapsed && (
+            <>
+              <span className="flex-1 text-left">{item.label}</span>
+              {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </>
+          )}
+        </button>
+
+        {isOpen && (
+          <div className="ml-4 mt-0.5 space-y-0.5 pl-3 border-l border-slate-800">
+            {item.children!.map(child => (
+              <button
+                key={child.id}
+                onClick={() => onNavigate(child.id)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                  activeSection === child.id
+                    ? 'bg-emerald-500/15 text-emerald-400 font-medium'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+                }`}
+              >
+                {child.icon}
+                {child.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -208,73 +336,38 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
         </button>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {menuItems.map(item => {
-          const hasChildren = !!item.children;
-          const isOpen = !collapsed && openGroup === item.id;
-          const groupActive = isGroupActive(item);
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        {collapsed ? (
+          flatMenuItems.map(item => renderMenuItem(item))
+        ) : (
+          menuCategories.map(category => {
+            const isOpen = openCategory === category.id;
+            const categoryActive = isCategoryActive(category);
 
-          if (!hasChildren) {
             return (
-              <button
-                key={item.id}
-                onClick={() => onNavigate(item.id)}
-                title={collapsed ? item.label : undefined}
-                className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  activeSection === item.id
-                    ? 'bg-emerald-500/15 text-emerald-400'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }`}
-              >
-                <span className={activeSection === item.id ? 'text-emerald-400' : ''}>{item.icon}</span>
-                {!collapsed && item.label}
-              </button>
-            );
-          }
+              <div key={category.id} className="space-y-0.5">
+                <button
+                  onClick={() => toggleCategory(category.id)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                    categoryActive
+                      ? 'bg-slate-900 text-emerald-400'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                  }`}
+                >
+                  <span className={categoryActive ? 'text-emerald-400' : 'text-slate-400'}>{category.icon}</span>
+                  <span className="flex-1 text-left">{category.label}</span>
+                  {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
 
-          return (
-            <div key={item.id}>
-              <button
-                onClick={() => handleGroupClick(item)}
-                title={collapsed ? item.label : undefined}
-                className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  groupActive
-                    ? collapsed
-                      ? 'bg-emerald-500/15 text-emerald-400'
-                      : 'text-emerald-400'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }`}
-              >
-                <span className={groupActive ? 'text-emerald-400' : ''}>{item.icon}</span>
-                {!collapsed && (
-                  <>
-                    <span className="flex-1 text-left">{item.label}</span>
-                    {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </>
+                {isOpen && (
+                  <div className="ml-3 mt-1 space-y-0.5 pl-3 border-l border-slate-800">
+                    {category.items.map(item => renderMenuItem(item, true))}
+                  </div>
                 )}
-              </button>
-
-              {isOpen && (
-                <div className="ml-4 mt-0.5 space-y-0.5 pl-3 border-l border-slate-800">
-                  {item.children!.map(child => (
-                    <button
-                      key={child.id}
-                      onClick={() => onNavigate(child.id)}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
-                        activeSection === child.id
-                          ? 'bg-emerald-500/15 text-emerald-400 font-medium'
-                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
-                      }`}
-                    >
-                      {child.icon}
-                      {child.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+              </div>
+            );
+          })
+        )}
       </nav>
 
       {/* Footer Update */}

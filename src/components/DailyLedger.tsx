@@ -15,6 +15,7 @@ import type { TransactionWithRelations, PaymentMode } from '../lib/database.type
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
 
@@ -44,6 +45,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
   const [modeFilter, setModeFilter] = useState<PaymentMode | 'ALL'>('ALL');
   const [productFilter, setProductFilter] = useState<string>('ALL');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TransactionWithRelations | null>(null);
   const [page, setPage] = useState(1);
   const [attachmentPreview, setAttachmentPreview] = useState<string[] | null>(null);
   const [attachmentPreviewLoading, setAttachmentPreviewLoading] = useState(false);
@@ -63,11 +65,16 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
     setLoading(false);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this entry?')) return;
-    setDeletingId(id);
-    await supabase.from('transactions').delete().eq('id', id);
-    setTransactions(prev => prev.filter(t => t.id !== id));
+  function handleDelete(transaction: TransactionWithRelations) {
+    setDeleteTarget(transaction);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
+    await supabase.from('transactions').delete().eq('id', deleteTarget.id);
+    setTransactions(prev => prev.filter(t => t.id !== deleteTarget.id));
+    setDeleteTarget(null);
     setDeletingId(null);
   }
 
@@ -281,7 +288,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
                               )}
                               {canDelete && (
                                 <button
-                                  onClick={() => handleDelete(tx.id)}
+                                  onClick={() => handleDelete(tx)}
                                   disabled={deletingId === tx.id}
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                                 >
@@ -344,6 +351,33 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
           </div>
         </div>
       )}
+
+      <ActionModal
+        open={!!deleteTarget}
+        title="Delete Ledger Entry"
+        description="This will permanently remove the selected daily transaction."
+        variant="danger"
+        confirmLabel="Delete Entry"
+        loading={!!deleteTarget && deletingId === deleteTarget.id}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Delete DR <span className="font-semibold text-slate-900">{deleteTarget?.dr_number}</span>?
+          </p>
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</p>
+              <p className="mt-1 truncate font-medium text-slate-700">{deleteTarget?.customers?.name ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Total</p>
+              <p className="mt-1 font-bold text-slate-800">PHP {deleteTarget ? fmt(deleteTarget.total_amount ?? 0) : '0.00'}</p>
+            </div>
+          </div>
+        </div>
+      </ActionModal>
     </div>
   );
 }

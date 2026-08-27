@@ -20,6 +20,7 @@ import type { Customer, CustomerCreditLedgerRow, HaulerOffsetLedgerRow, Json, Tr
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
 
@@ -49,6 +50,9 @@ interface HaulerOffsetLedgerProps {
   canViewDetail?: boolean;
   canViewStatement?: boolean;
   canExportStatement?: boolean;
+  canCustomerCreditAdd?: boolean;
+  canCustomerCreditAdjust?: boolean;
+  canCustomerCreditExport?: boolean;
 }
 
 interface EntryForm {
@@ -298,6 +302,9 @@ export default function HaulerOffsetLedger({
   canViewDetail = false,
   canViewStatement = false,
   canExportStatement = false,
+  canCustomerCreditAdd = false,
+  canCustomerCreditAdjust = false,
+  canCustomerCreditExport = false,
 }: HaulerOffsetLedgerProps) {
   const initialRange = monthRange();
   const [activeLedgerTab, setActiveLedgerTab] = useState<OffsetLedgerTab>('HAULER');
@@ -331,10 +338,14 @@ export default function HaulerOffsetLedger({
   const [showAddModal, setShowAddModal] = useState(false);
   const [showCustomerCreditModal, setShowCustomerCreditModal] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
+  const [voidTarget, setVoidTarget] = useState<LedgerEntry | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [infoModal, setInfoModal] = useState('');
   const [form, setForm] = useState<EntryForm>(() => emptyForm(canAdd ? 'HAULING_SERVICE' : 'OPENING_BALANCE'));
-  const [customerCreditForm, setCustomerCreditForm] = useState<CustomerCreditForm>(() => emptyCustomerCreditForm(canAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
+  const [customerCreditForm, setCustomerCreditForm] = useState<CustomerCreditForm>(() => emptyCustomerCreditForm(canCustomerCreditAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
 
-  const canManualAdd = canAdd || canAdjust;
+  const canHaulerManualAdd = canAdd || canAdjust;
+  const canCustomerManualAdd = canCustomerCreditAdd || canCustomerCreditAdjust;
   const summary = ledgerRows.find(row => row.row_kind === 'SUMMARY');
   const selectedHauler = haulers.find(hauler => hauler.id === haulerId) ?? null;
   const selectedCustomer = customerId === 'ALL' ? null : customers.find(customer => customer.id === customerId) ?? null;
@@ -666,8 +677,8 @@ export default function HaulerOffsetLedger({
   }
 
   function openCustomerCreditModal() {
-    if (customerId === 'ALL' || !canManualAdd) return;
-    setCustomerCreditForm(emptyCustomerCreditForm(canAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
+    if (customerId === 'ALL' || !canCustomerManualAdd) return;
+    setCustomerCreditForm(emptyCustomerCreditForm(canCustomerCreditAdd ? 'ADVANCE_PAYMENT' : 'OPENING_BALANCE'));
     setFormError('');
     setSuccessMessage('');
     setShowCustomerCreditModal(true);
@@ -758,7 +769,7 @@ export default function HaulerOffsetLedger({
 
   async function saveManualEntry(event: React.FormEvent) {
     event.preventDefault();
-    if (!haulerId || !canManualAdd) return;
+    if (!haulerId || !canHaulerManualAdd) return;
 
     const isHaulingService = form.transaction_type === 'HAULING_SERVICE';
     let amount = Number(form.amount);
@@ -839,7 +850,7 @@ export default function HaulerOffsetLedger({
 
   async function saveCustomerCreditEntry(event: React.FormEvent) {
     event.preventDefault();
-    if (customerId === 'ALL' || !canManualAdd) return;
+    if (customerId === 'ALL' || !canCustomerManualAdd) return;
 
     const amount = Number(customerCreditForm.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -889,7 +900,7 @@ export default function HaulerOffsetLedger({
   }
 
   async function settleCustomerReceivable(row: CustomerOffsetRow) {
-    if (!canAdjust || row.status !== 'PENDING' || row.payment_mode === 'SPLIT') return;
+    if (!canCustomerCreditAdjust || row.status !== 'PENDING') return;
 
     setSettlingTransactionId(row.id);
     setCustomerError('');
@@ -912,13 +923,24 @@ export default function HaulerOffsetLedger({
     setSettlingTransactionId(null);
   }
 
-  async function voidManualEntry(entry: LedgerEntry) {
+  function voidManualEntry(entry: LedgerEntry) {
     if (!canAdjust || entry.source_module !== 'hauler_offset_entries' || !entry.source_id) return;
-    const reason = prompt('Void reason?');
-    if (reason === null) return;
+    setVoidTarget(entry);
+    setVoidReason('');
+  }
+
+  async function confirmVoidManualEntry() {
+    if (!canAdjust || !voidTarget?.source_id) return;
+    const reason = voidReason.trim();
+    if (!reason) {
+      setFormError('Void reason is required.');
+      return;
+    }
+
+    setFormError('');
     setSaving(true);
     const { error: rpcError } = await supabase.rpc('void_hauler_offset_entry', {
-      p_entry_id: entry.source_id,
+      p_entry_id: voidTarget.source_id,
       p_reason: reason,
     });
     setSaving(false);
@@ -926,13 +948,15 @@ export default function HaulerOffsetLedger({
       setError(rpcError.message);
       return;
     }
+    setVoidTarget(null);
+    setVoidReason('');
     setSelectedEntry(null);
     await fetchLedger();
   }
 
   function exportExcel() {
     if (!canExport || filteredEntries.length === 0) {
-      alert('No ledger rows to export.');
+      setInfoModal('No ledger rows to export.');
       return;
     }
 
@@ -967,7 +991,7 @@ export default function HaulerOffsetLedger({
 
   function exportCustomerExcel() {
     if (!canExport || filteredCustomerRows.length === 0) {
-      alert('No customer offset rows to export.');
+      setInfoModal('No customer offset rows to export.');
       return;
     }
 
@@ -1035,7 +1059,7 @@ export default function HaulerOffsetLedger({
     const generated = new Date().toLocaleString('en-PH');
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
-      alert('Please allow pop-ups to export the statement PDF.');
+      setInfoModal('Please allow pop-ups to export the statement PDF.');
       return;
     }
 
@@ -1131,10 +1155,10 @@ export default function HaulerOffsetLedger({
     ] : []),
   ];
   const customerCreditTypeOptions = [
-    ...(canAdd ? [
+    ...(canCustomerCreditAdd ? [
       { value: 'ADVANCE_PAYMENT' as const, label: 'Advance Payment' },
     ] : []),
-    ...(canAdjust ? [
+    ...(canCustomerCreditAdjust ? [
       { value: 'OPENING_BALANCE' as const, label: 'Opening Balance' },
       { value: 'ADJUSTMENT' as const, label: 'Adjustment' },
     ] : []),
@@ -1156,7 +1180,7 @@ export default function HaulerOffsetLedger({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {canExport && (
+          {(activeLedgerTab === 'HAULER' ? canExport : canCustomerCreditExport) && (
             <button
               onClick={activeLedgerTab === 'HAULER' ? exportExcel : exportCustomerExcel}
               disabled={activeLedgerTab === 'HAULER' ? loading || filteredEntries.length === 0 : customerLoading || filteredCustomerRows.length === 0}
@@ -1197,7 +1221,8 @@ export default function HaulerOffsetLedger({
         </button>
       </div>
 
-      {activeLedgerTab === 'HAULER' && !canManualAdd && !canExport && <ReadOnlyNotice message="This user group can review hauler offset balances only." />}
+      {activeLedgerTab === 'HAULER' && !canHaulerManualAdd && !canExport && <ReadOnlyNotice message="This user group can review hauler balances only." />}
+      {activeLedgerTab === 'CUSTOMER' && !canCustomerManualAdd && !canCustomerCreditExport && <ReadOnlyNotice message="This user group can review customer credit balances only." />}
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
@@ -1235,12 +1260,12 @@ export default function HaulerOffsetLedger({
             </select>
           </Field>
           <div className="flex items-end">
-            {activeLedgerTab === 'HAULER' && canManualAdd && (
+            {activeLedgerTab === 'HAULER' && canHaulerManualAdd && (
               <button onClick={openAddModal} disabled={!haulerId} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
                 <Plus size={16} /> Add Transaction
               </button>
             )}
-            {activeLedgerTab === 'CUSTOMER' && canManualAdd && (
+            {activeLedgerTab === 'CUSTOMER' && canCustomerManualAdd && (
               <button onClick={openCustomerCreditModal} disabled={customerId === 'ALL'} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 disabled:opacity-60">
                 <Plus size={16} /> Add Credit
               </button>
@@ -1479,7 +1504,7 @@ export default function HaulerOffsetLedger({
                             <th className="px-4 py-3 text-center">Status</th>
                             <th className="px-4 py-3 text-right">Amount</th>
                             <th className="px-4 py-3 text-right">Running Total</th>
-                            {canAdjust && <th className="px-4 py-3 text-center">Action</th>}
+                            {canCustomerCreditAdjust && <th className="px-4 py-3 text-center">Action</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -1502,9 +1527,9 @@ export default function HaulerOffsetLedger({
                               </td>
                               <td className="px-4 py-3 text-right text-orange-600 font-semibold tabular-nums">{currency(row.offset_amount)}</td>
                               <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(row.running_total)}</td>
-                              {canAdjust && (
+                              {canCustomerCreditAdjust && (
                                 <td className="px-4 py-3 text-center">
-                                  {row.status === 'PENDING' && row.payment_mode !== 'SPLIT' ? (
+                                  {row.status === 'PENDING' ? (
                                     <button
                                       type="button"
                                       onClick={() => settleCustomerReceivable(row)}
@@ -1867,6 +1892,52 @@ export default function HaulerOffsetLedger({
           onVoid={() => voidManualEntry(selectedEntry)}
         />
       )}
+
+      <ActionModal
+        open={!!voidTarget}
+        title="Void Manual Entry"
+        description="A voided entry stays traceable in the ledger history with your reason."
+        variant="warning"
+        confirmLabel="Void Entry"
+        loading={saving}
+        onClose={() => {
+          setVoidTarget(null);
+          setVoidReason('');
+          setFormError('');
+        }}
+        onConfirm={confirmVoidManualEntry}
+      >
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Entry</p>
+            <p className="mt-1 font-semibold text-slate-800">{voidTarget?.description || voidTarget?.reference_no || 'Manual entry'}</p>
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-slate-500">Void Reason *</span>
+            <textarea
+              value={voidReason}
+              onChange={event => {
+                setVoidReason(event.target.value);
+                setFormError('');
+              }}
+              className={`${inputClass} min-h-[100px] resize-none`}
+              placeholder="Reason for voiding this entry"
+            />
+          </label>
+          {formError && <p className="text-sm text-red-600">{formError}</p>}
+        </div>
+      </ActionModal>
+
+      <ActionModal
+        open={!!infoModal}
+        title="Export Notice"
+        description={infoModal}
+        variant="info"
+        confirmLabel="Got It"
+        showCancel={false}
+        onClose={() => setInfoModal('')}
+        onConfirm={() => setInfoModal('')}
+      />
     </div>
   );
 }

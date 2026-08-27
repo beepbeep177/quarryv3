@@ -12,6 +12,8 @@ import Expenses from './components/Expenses';
 import FuelManagement from './components/FuelManagement';
 import HaulerOffsetLedger from './components/HaulerOffsetLedger';
 import StoneCrusherOperations from './components/StoneCrusherOperations';
+import SandWashingOperations from './components/SandWashingOperations';
+import QuarrySiteOperations from './components/QuarrySiteOperations';
 import Reports from './components/Reports';
 import AccessControl from './components/AccessControl';
 import AuthPage from './pages/AuthPage';
@@ -35,15 +37,17 @@ export default function App() {
     dashboard: can('DASHBOARD_VIEW'),
     'daily-add': canAddDailyLedger,
     'daily-view': can('DAILY_LEDGER_VIEW'),
-    'customers-list': can('CUSTOMERS_VIEW'),
-    'customers-ar': can('ACCOUNTS_RECEIVABLE_VIEW'),
-    'logistics-trucks': can('TRUCKS_VIEW'),
-    'logistics-pricing': can('PRICING_VIEW'),
-    expenses: can('EXPENSES_VIEW'),
-    'fuel-management': can('FUEL_VIEW') || isManager,
-    'hauler-offset-ledger': can('HAULER_OFFSET_LEDGER_VIEW') || isManager,
-    operations: can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || isManager,
+    'customers-list': can('CUSTOMERS_VIEW') || can('CUSTOMERS_ADD') || can('CUSTOMERS_EDIT') || can('CUSTOMERS_DELETE'),
+    'customers-ar': can('ACCOUNTS_RECEIVABLE_VIEW') || can('ACCOUNTS_RECEIVABLE_EDIT'),
+    'logistics-trucks': can('TRUCKS_VIEW') || can('TRUCKS_ADD') || can('TRUCKS_EDIT') || can('TRUCKS_DELETE'),
+    'logistics-pricing': can('PRICING_VIEW') || can('PRICING_ADD') || can('PRICING_EDIT') || can('PRICING_DELETE'),
+    expenses: can('EXPENSES_VIEW') || can('EXPENSES_ADD') || can('EXPENSES_EDIT') || can('EXPENSES_DELETE'),
+    'fuel-management': can('FUEL_VIEW') || can('FUEL_PURCHASE_ADD') || can('FUEL_ISSUANCE_ADD') || can('FUEL_ADJUST') || can('FUEL_EXPORT') || can('FUEL_EQUIPMENT_MANAGE') || isManager,
+    'hauler-offset-ledger': can('HAULER_OFFSET_LEDGER_VIEW') || can('HAULER_OFFSET_LEDGER_ADD') || can('HAULER_OFFSET_LEDGER_ADJUST') || can('CUSTOMER_CREDIT_VIEW') || can('CUSTOMER_CREDIT_ADD') || can('CUSTOMER_CREDIT_ADJUST') || isManager,
+    operations: can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || can('SW_OPERATIONS_VIEW') || can('SW_OPERATIONS_ADD') || can('SW_OPERATIONS_EDIT') || can('QS_OPERATIONS_VIEW') || can('QS_OPERATIONS_ADD') || can('QS_OPERATIONS_EDIT') || isManager,
     'operations-stone-crusher': can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || isManager,
+    'operations-sand-washing': can('SW_OPERATIONS_VIEW') || can('SW_OPERATIONS_ADD') || can('SW_OPERATIONS_EDIT') || isManager,
+    'operations-quarry-site': can('QS_OPERATIONS_VIEW') || can('QS_OPERATIONS_ADD') || can('QS_OPERATIONS_EDIT') || isManager,
     reports: can('REPORTS_VIEW'),
     'access-control': can('USER_GROUP_ACCESS_VIEW') || can('USER_GROUP_ACCESS_MANAGE') || can('USER_ACCOUNTS_MANAGE') || can('AUDIT_LOG_VIEW'),
   }), [can, canAddDailyLedger, isManager]);
@@ -62,6 +66,8 @@ export default function App() {
       'fuel-management',
       'hauler-offset-ledger',
       'operations-stone-crusher',
+      'operations-sand-washing',
+      'operations-quarry-site',
       'operations',
       'reports',
       'access-control',
@@ -110,7 +116,17 @@ export default function App() {
       setReportTab('sales');
     }
 
-    setActiveSection(section === 'operations' ? 'operations-stone-crusher' : section);
+    if (section === 'operations') {
+      const firstAllowedOperation = ([
+        'operations-stone-crusher',
+        'operations-sand-washing',
+        'operations-quarry-site',
+      ] as NavSection[]).find(operationSection => canViewSection[operationSection]);
+      setActiveSection(firstAllowedOperation ?? section);
+      return;
+    }
+
+    setActiveSection(section);
   }
 
   function openProductReport() {
@@ -189,10 +205,18 @@ export default function App() {
             {activeSection === 'logistics-pricing' && <PricingList canAdd={can('PRICING_ADD')} canEdit={can('PRICING_EDIT')} canDelete={can('PRICING_DELETE')} />}
             {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canEdit={can('EXPENSES_EDIT') || isManager} canDelete={can('EXPENSES_DELETE')} />}
             {activeSection === 'fuel-management' && <FuelManagement canAddPurchase={can('FUEL_PURCHASE_ADD') || isManager} canIssue={can('FUEL_ISSUANCE_ADD') || isManager} canAdjust={can('FUEL_ADJUST') || isManager} canExport={can('FUEL_EXPORT') || isManager} canManageEquipment={can('FUEL_EQUIPMENT_MANAGE') || isManager} />}
-            {activeSection === 'hauler-offset-ledger' && <HaulerOffsetLedger canAdd={can('HAULER_OFFSET_LEDGER_ADD') || isManager} canAdjust={can('HAULER_OFFSET_LEDGER_ADJUST') || isManager} canExport={can('HAULER_OFFSET_LEDGER_EXPORT') || isManager} canViewDetail={can('HAULER_OFFSET_LEDGER_VIEW_DETAIL') || isManager} canViewStatement={can('HAULER_STATEMENT_VIEW') || isManager} canExportStatement={can('HAULER_STATEMENT_EXPORT') || isManager} />}
-            {activeSection === 'operations' && <StoneCrusherOperations canAdd={can('SC_OPERATIONS_ADD') || isManager} canEdit={can('SC_OPERATIONS_EDIT') || isManager} canDelete={can('SC_OPERATIONS_DELETE') || isManager} canExport={can('SC_OPERATIONS_EXPORT') || isManager} />}
+            {activeSection === 'hauler-offset-ledger' && <HaulerOffsetLedger canAdd={can('HAULER_OFFSET_LEDGER_ADD') || isManager} canAdjust={can('HAULER_OFFSET_LEDGER_ADJUST') || isManager} canExport={can('HAULER_OFFSET_LEDGER_EXPORT') || isManager} canViewDetail={can('HAULER_OFFSET_LEDGER_VIEW_DETAIL') || isManager} canViewStatement={can('HAULER_STATEMENT_VIEW') || isManager} canExportStatement={can('HAULER_STATEMENT_EXPORT') || isManager} canCustomerCreditAdd={can('CUSTOMER_CREDIT_ADD') || isManager} canCustomerCreditAdjust={can('CUSTOMER_CREDIT_ADJUST') || isManager} canCustomerCreditExport={can('CUSTOMER_CREDIT_EXPORT') || isManager} />}
+            {activeSection === 'operations' && (
+              canViewSection['operations-stone-crusher']
+                ? <StoneCrusherOperations canAdd={can('SC_OPERATIONS_ADD') || isManager} canEdit={can('SC_OPERATIONS_EDIT') || isManager} canDelete={can('SC_OPERATIONS_DELETE') || isManager} canExport={can('SC_OPERATIONS_EXPORT') || isManager} />
+                : canViewSection['operations-sand-washing']
+                  ? <SandWashingOperations canAdd={can('SW_OPERATIONS_ADD') || isManager} canEdit={can('SW_OPERATIONS_EDIT') || isManager} canDelete={can('SW_OPERATIONS_DELETE') || isManager} canExport={can('SW_OPERATIONS_EXPORT') || isManager} />
+                  : <QuarrySiteOperations canAdd={can('QS_OPERATIONS_ADD') || isManager} canEdit={can('QS_OPERATIONS_EDIT') || isManager} canDelete={can('QS_OPERATIONS_DELETE') || isManager} canExport={can('QS_OPERATIONS_EXPORT') || isManager} />
+            )}
             {activeSection === 'operations-stone-crusher' && <StoneCrusherOperations canAdd={can('SC_OPERATIONS_ADD') || isManager} canEdit={can('SC_OPERATIONS_EDIT') || isManager} canDelete={can('SC_OPERATIONS_DELETE') || isManager} canExport={can('SC_OPERATIONS_EXPORT') || isManager} />}
-            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} onEditTransaction={handleEditTransaction} />}
+            {activeSection === 'operations-sand-washing' && <SandWashingOperations canAdd={can('SW_OPERATIONS_ADD') || isManager} canEdit={can('SW_OPERATIONS_EDIT') || isManager} canDelete={can('SW_OPERATIONS_DELETE') || isManager} canExport={can('SW_OPERATIONS_EXPORT') || isManager} />}
+            {activeSection === 'operations-quarry-site' && <QuarrySiteOperations canAdd={can('QS_OPERATIONS_ADD') || isManager} canEdit={can('QS_OPERATIONS_EDIT') || isManager} canDelete={can('QS_OPERATIONS_DELETE') || isManager} canExport={can('QS_OPERATIONS_EXPORT') || isManager} />}
+            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} canExport={can('REPORTS_EXPORT') || isManager} canPrint={can('REPORTS_PRINT') || isManager} onEditTransaction={handleEditTransaction} />}
             {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
           </div>
         </div>

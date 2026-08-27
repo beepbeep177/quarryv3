@@ -22,6 +22,8 @@ import type { CompanyEquipment, FuelBranch, FuelInventoryLedger, FuelInventorySt
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
+import ActionModal from './ActionModal';
+import { fetchAllPages } from '../lib/fetchAll';
 
 const PAGE_SIZE = 8;
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
@@ -206,6 +208,7 @@ export default function FuelManagement({
     liters: '',
     unit_cost: '',
     remarks: '',
+    post_to_expenses: true,
   });
   const [issuanceForm, setIssuanceForm] = useState({
     issuance_date: todayInput(),
@@ -235,6 +238,9 @@ export default function FuelManagement({
     notes: '',
   });
   const [equipmentSaving, setEquipmentSaving] = useState(false);
+  const [reverseTarget, setReverseTarget] = useState<FuelInventoryLedger | null>(null);
+  const [deactivateTarget, setDeactivateTarget] = useState<CompanyEquipment | null>(null);
+  const [infoModal, setInfoModal] = useState('');
   const [adjustmentForm, setAdjustmentForm] = useState({
     movement_date: todayInput(),
     liters_delta: '',
@@ -252,73 +258,55 @@ export default function FuelManagement({
   const fetchFuelData = useCallback(async () => {
     setLoading(true);
     setError('');
-
-    const branchQuery = supabase
-      .from('fuel_branches')
-      .select('*')
-      .eq('is_active', true)
-      .order('is_default', { ascending: false })
-      .order('name');
-
-    const stateQuery = supabase.from('fuel_inventory_state').select('*');
-
-    let purchaseQuery = supabase
-      .from('fuel_purchases')
-      .select('*')
-      .order('purchase_date', { ascending: false })
-      .order('created_at', { ascending: false });
-
-    let issuanceQuery = supabase
-      .from('fuel_issuances')
-      .select('*, trucks(*), company_equipment(*)')
-      .order('issuance_date', { ascending: false })
-      .order('created_at', { ascending: false });
-
-    let ledgerQuery = supabase
-      .from('fuel_inventory_ledger')
-      .select('*')
-      .order('movement_date', { ascending: false })
-      .order('created_at', { ascending: false });
-
-    if (selectedBranchId !== 'ALL') {
-      purchaseQuery = purchaseQuery.eq('branch_id', selectedBranchId);
-      issuanceQuery = issuanceQuery.eq('branch_id', selectedBranchId);
-      ledgerQuery = ledgerQuery.eq('branch_id', selectedBranchId);
-    }
-
-    const truckQuery = supabase
-      .from('trucks')
-      .select('*')
-      .order('plate_number');
-    const equipmentQuery = supabase
-      .from('company_equipment')
-      .select('*')
-      .eq('is_active', true)
-      .order('equipment_type')
-      .order('name');
-
     const [branchResult, stateResult, purchaseResult, issuanceResult, ledgerResult, truckResult, equipmentResult] = await Promise.all([
-      branchQuery,
-      stateQuery,
-      purchaseQuery,
-      issuanceQuery,
-      ledgerQuery,
-      truckQuery,
-      equipmentQuery,
+      fetchAllPages<FuelBranch>(async (from, to) => {
+        const page = await supabase.from('fuel_branches').select('*').eq('is_active', true).order('is_default', { ascending: false }).order('name').range(from, to);
+        return { data: page.data as FuelBranch[] | null, error: page.error };
+      }),
+      fetchAllPages<FuelInventoryState>(async (from, to) => {
+        const page = await supabase.from('fuel_inventory_state').select('*').range(from, to);
+        return { data: page.data as FuelInventoryState[] | null, error: page.error };
+      }),
+      fetchAllPages<FuelPurchase>(async (from, to) => {
+        let query = supabase.from('fuel_purchases').select('*').order('purchase_date', { ascending: false }).order('created_at', { ascending: false });
+        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+        const page = await query.range(from, to);
+        return { data: page.data as FuelPurchase[] | null, error: page.error };
+      }),
+      fetchAllPages<FuelIssuanceWithTarget>(async (from, to) => {
+        let query = supabase.from('fuel_issuances').select('*, trucks(*), company_equipment(*)').order('issuance_date', { ascending: false }).order('created_at', { ascending: false });
+        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+        const page = await query.range(from, to);
+        return { data: page.data as FuelIssuanceWithTarget[] | null, error: page.error };
+      }),
+      fetchAllPages<FuelInventoryLedger>(async (from, to) => {
+        let query = supabase.from('fuel_inventory_ledger').select('*').order('movement_date', { ascending: false }).order('created_at', { ascending: false });
+        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+        const page = await query.range(from, to);
+        return { data: page.data as FuelInventoryLedger[] | null, error: page.error };
+      }),
+      fetchAllPages<TruckType>(async (from, to) => {
+        const page = await supabase.from('trucks').select('*').order('plate_number').range(from, to);
+        return { data: page.data as TruckType[] | null, error: page.error };
+      }),
+      fetchAllPages<CompanyEquipment>(async (from, to) => {
+        const page = await supabase.from('company_equipment').select('*').eq('is_active', true).order('equipment_type').order('name').range(from, to);
+        return { data: page.data as CompanyEquipment[] | null, error: page.error };
+      }),
     ]);
 
     const firstError = branchResult.error || stateResult.error || purchaseResult.error || issuanceResult.error || ledgerResult.error || truckResult.error || equipmentResult.error;
     if (firstError) setError(firstError.message);
 
-    const truckRows = (truckResult.data ?? []) as TruckType[];
-    setBranches((branchResult.data ?? []) as FuelBranch[]);
-    setStates((stateResult.data ?? []) as FuelInventoryState[]);
-    setPurchases((purchaseResult.data ?? []) as FuelPurchase[]);
-    setIssuances((issuanceResult.data ?? []) as FuelIssuanceWithTarget[]);
-    setLedger((ledgerResult.data ?? []) as FuelInventoryLedger[]);
+    const truckRows = truckResult.data;
+    setBranches(branchResult.data);
+    setStates(stateResult.data);
+    setPurchases(purchaseResult.data);
+    setIssuances(issuanceResult.data);
+    setLedger(ledgerResult.data);
     setHaulerTrucks(truckRows.filter(truck => truck.is_hauler));
     setCompanyTrucks(truckRows.filter(truck => !truck.is_hauler));
-    setCompanyEquipment((equipmentResult.data ?? []) as CompanyEquipment[]);
+    setCompanyEquipment(equipmentResult.data);
     setLoading(false);
   }, [selectedBranchId]);
 
@@ -445,6 +433,7 @@ export default function FuelManagement({
       p_liters: Number(purchaseForm.liters),
       p_unit_cost: Number(purchaseForm.unit_cost),
       p_remarks: purchaseForm.remarks.trim(),
+      p_post_to_expenses: purchaseForm.post_to_expenses,
     });
     setSaving(false);
 
@@ -453,7 +442,20 @@ export default function FuelManagement({
       return;
     }
 
-    setPurchaseForm({ purchase_date: todayInput(), supplier: '', reference_no: '', liters: '', unit_cost: '', remarks: '' });
+    setPurchaseForm({ purchase_date: todayInput(), supplier: '', reference_no: '', liters: '', unit_cost: '', remarks: '', post_to_expenses: true });
+    await fetchFuelData();
+  }
+
+  async function postPurchaseToExpenses(purchase: FuelPurchase) {
+    if (!canAddPurchase || purchase.expense_id) return;
+    setSaving(true);
+    setError('');
+    const { error: rpcError } = await supabase.rpc('post_fuel_purchase_to_expenses', { p_purchase_id: purchase.id });
+    setSaving(false);
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
     await fetchFuelData();
   }
 
@@ -525,13 +527,17 @@ export default function FuelManagement({
     await fetchFuelData();
   }
 
-  async function reverseMovement(item: FuelInventoryLedger) {
-    if (!confirm('Reverse this fuel movement?')) return;
+  function reverseMovement(item: FuelInventoryLedger) {
+    setReverseTarget(item);
+  }
+
+  async function confirmReverseMovement() {
+    if (!reverseTarget) return;
     setSaving(true);
     setError('');
     const { error: rpcError } = await supabase.rpc('reverse_fuel_movement', {
-      p_ledger_id: item.id,
-      p_reason: `Reversal of ${item.movement_type}`,
+      p_ledger_id: reverseTarget.id,
+      p_reason: `Reversal of ${reverseTarget.movement_type}`,
     });
     setSaving(false);
 
@@ -540,6 +546,7 @@ export default function FuelManagement({
       return;
     }
 
+    setReverseTarget(null);
     await fetchFuelData();
   }
 
@@ -641,15 +648,20 @@ export default function FuelManagement({
     await fetchFuelData();
   }
 
-  async function deactivateEquipment(item: CompanyEquipment) {
-    if (!canManageEquipment || !confirm(`Deactivate ${item.name}?`)) return;
+  function deactivateEquipment(item: CompanyEquipment) {
+    if (!canManageEquipment) return;
+    setDeactivateTarget(item);
+  }
+
+  async function confirmDeactivateEquipment() {
+    if (!canManageEquipment || !deactivateTarget) return;
     setEquipmentSaving(true);
     setError('');
 
     const { error: saveError } = await supabase
       .from('company_equipment')
       .update({ is_active: false })
-      .eq('id', item.id);
+      .eq('id', deactivateTarget.id);
     setEquipmentSaving(false);
 
     if (saveError) {
@@ -657,6 +669,7 @@ export default function FuelManagement({
       return;
     }
 
+    setDeactivateTarget(null);
     await fetchFuelData();
   }
 
@@ -712,7 +725,7 @@ export default function FuelManagement({
     const rowsHtml = report.rows.map(row => `<tr>${row.map(cell => `<td>${htmlEscape(cell)}</td>`).join('')}</tr>`).join('');
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
-      alert('Please allow pop-ups to export the report PDF.');
+      setInfoModal('Please allow pop-ups to export the report PDF.');
       return;
     }
 
@@ -910,6 +923,10 @@ export default function FuelManagement({
                       <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={purchaseForm.liters} onChange={e => setPurchaseForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
                       <Field label="Price / L"><input required type="number" min="0" step="0.01" value={purchaseForm.unit_cost} onChange={e => setPurchaseForm(f => ({ ...f, unit_cost: e.target.value }))} className={inputClass} /></Field>
                     </div>
+                    <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+                      <input type="checkbox" checked={purchaseForm.post_to_expenses} onChange={e => setPurchaseForm(f => ({ ...f, post_to_expenses: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+                      <span><span className="block font-semibold">Post to Expenses</span><span className="block text-xs text-slate-500">Creates the linked Diesel expense once.</span></span>
+                    </label>
                     <Field label="Remarks"><textarea value={purchaseForm.remarks} onChange={e => setPurchaseForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
                     <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
                       {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
@@ -919,7 +936,7 @@ export default function FuelManagement({
                 </div>
               )}
               <div className={canAddPurchase ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <PurchasesTable rows={pagedPurchases} />
+                <PurchasesTable rows={pagedPurchases} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} />
                 <Pagination page={purchaseCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredPurchases.length} onPageChange={setPurchasePage} />
               </div>
             </div>
@@ -1069,6 +1086,54 @@ export default function FuelManagement({
           )}
         </>
       )}
+
+      <ActionModal
+        open={!!reverseTarget}
+        title="Reverse Fuel Movement"
+        description="This will create a reversing ledger entry for the selected movement."
+        variant="warning"
+        confirmLabel="Reverse Movement"
+        loading={saving}
+        onClose={() => setReverseTarget(null)}
+        onConfirm={confirmReverseMovement}
+      >
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Type</p>
+            <p className="mt-1 font-bold text-slate-800">{reverseTarget?.movement_type.replace('_', ' ')}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Liters</p>
+            <p className="mt-1 font-bold text-slate-800">{reverseTarget ? `${fmt(reverseTarget.liters_delta)} L` : '-'}</p>
+          </div>
+        </div>
+      </ActionModal>
+
+      <ActionModal
+        open={!!deactivateTarget}
+        title="Deactivate Equipment"
+        description="This equipment will be hidden from future fuel issuance selections."
+        variant="warning"
+        confirmLabel="Deactivate"
+        loading={equipmentSaving}
+        onClose={() => setDeactivateTarget(null)}
+        onConfirm={confirmDeactivateEquipment}
+      >
+        <p className="text-sm text-slate-600">
+          Deactivate <span className="font-semibold text-slate-900">{deactivateTarget?.name}</span>?
+        </p>
+      </ActionModal>
+
+      <ActionModal
+        open={!!infoModal}
+        title="Export Blocked"
+        description={infoModal}
+        variant="info"
+        confirmLabel="Got It"
+        showCancel={false}
+        onClose={() => setInfoModal('')}
+        onConfirm={() => setInfoModal('')}
+      />
     </div>
   );
 }
@@ -1108,7 +1173,7 @@ function RecentPurchases({ rows, onViewAll }: { rows: FuelPurchase[]; onViewAll:
   );
 }
 
-function PurchasesTable({ rows, compact = false }: { rows: FuelPurchase[]; compact?: boolean }) {
+function PurchasesTable({ rows, compact = false, canPost = false, saving = false, onPost }: { rows: FuelPurchase[]; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void }) {
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -1121,11 +1186,12 @@ function PurchasesTable({ rows, compact = false }: { rows: FuelPurchase[]; compa
               <th className="px-4 py-3 text-right">Liters</th>
               <th className="px-4 py-3 text-right">Price / L</th>
               <th className="px-4 py-3 text-right">Total</th>
+              <th className="px-4 py-3 text-center">Expense</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
+              <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
             ) : rows.map(item => (
               <tr key={item.id} className="hover:bg-slate-50">
                 <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(item.purchase_date)}</td>
@@ -1134,6 +1200,15 @@ function PurchasesTable({ rows, compact = false }: { rows: FuelPurchase[]; compa
                 <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>
                 <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{currency(item.unit_cost)}</td>
                 <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(item.total_amount)}</td>
+                <td className="px-4 py-3 text-center">
+                  {item.expense_id ? (
+                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">Posted</span>
+                  ) : canPost && !compact ? (
+                    <button type="button" onClick={() => onPost?.(item)} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"><ClipboardList size={12} /> Post</button>
+                  ) : (
+                    <span className="text-xs text-slate-400">Unposted</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

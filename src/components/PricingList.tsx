@@ -5,6 +5,7 @@ import type { Pricing } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 9;
 
@@ -30,6 +31,8 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ material_type?: string; unit_price?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Pricing | null>(null);
+  const [deleteError, setDeleteError] = useState('');
   const [page, setPage] = useState(1);
   const canManage = canAdd || canEdit || canDelete;
 
@@ -102,11 +105,22 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this pricing entry? This cannot be undone.')) return;
-    setDeletingId(id);
-    await supabase.from('pricing').delete().eq('id', id);
-    setPricingList(prev => prev.filter(p => p.id !== id));
+  function handleDelete(pricing: Pricing) {
+    setDeleteTarget(pricing);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+    setDeleteError('');
+    setDeletingId(deleteTarget.id);
+    const { error } = await supabase.from('pricing').delete().eq('id', deleteTarget.id);
+    if (error) {
+      setDeleteError(error.message);
+      setDeletingId(null);
+      return;
+    }
+    setPricingList(prev => prev.filter(p => p.id !== deleteTarget.id));
+    setDeleteTarget(null);
     setDeletingId(null);
   }
 
@@ -130,6 +144,12 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
       </div>
 
       {!canManage && <ReadOnlyNotice message="This user group can review pricing only." />}
+
+      {deleteError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {deleteError}
+        </div>
+      )}
 
       {showForm && canAdd && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
@@ -221,7 +241,7 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
                             </button>
                           )}
                           {canDelete && (
-                            <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                            <button onClick={() => handleDelete(p)} disabled={deletingId === p.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
                               {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                             </button>
                           )}
@@ -241,6 +261,27 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
           </div>
         </div>
       )}
+
+      <ActionModal
+        open={!!deleteTarget}
+        title="Delete Pricing Entry"
+        description="This will permanently remove the selected material price."
+        variant="danger"
+        confirmLabel="Delete Price"
+        loading={!!deleteTarget && deletingId === deleteTarget.id}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Delete <span className="font-semibold text-slate-900">{deleteTarget?.material_type}</span>? This cannot be undone.
+          </p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Unit Price</p>
+            <p className="mt-1 font-bold text-emerald-600">PHP {deleteTarget ? fmt(deleteTarget.unit_price) : '0.00'}</p>
+          </div>
+        </div>
+      </ActionModal>
     </div>
   );
 }

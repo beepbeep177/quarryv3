@@ -1,6 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type UserRole = 'manager' | 'operator';
+export type UserRole = string;
 export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
 export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' | 'DONATION' | 'SPLIT' | 'CUSTOMER_CREDIT';
 export type TransactionStatus = 'PENDING' | 'PAID';
@@ -51,6 +51,16 @@ export type ActivityCode =
   | 'SC_OPERATIONS_EDIT'
   | 'SC_OPERATIONS_DELETE'
   | 'SC_OPERATIONS_EXPORT'
+  | 'SW_OPERATIONS_VIEW'
+  | 'SW_OPERATIONS_ADD'
+  | 'SW_OPERATIONS_EDIT'
+  | 'SW_OPERATIONS_DELETE'
+  | 'SW_OPERATIONS_EXPORT'
+  | 'QS_OPERATIONS_VIEW'
+  | 'QS_OPERATIONS_ADD'
+  | 'QS_OPERATIONS_EDIT'
+  | 'QS_OPERATIONS_DELETE'
+  | 'QS_OPERATIONS_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -487,6 +497,8 @@ export type Database = {
           payee_supplier: string;
           description: string;
           liters_counter: number | null;
+          source_table: string | null;
+          source_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -496,6 +508,8 @@ export type Database = {
           payee_supplier?: string;
           description?: string;
           liters_counter?: number | null;
+          source_table?: string | null;
+          source_id?: string | null;
         };
         Update: {
           expense_date?: string;
@@ -504,6 +518,8 @@ export type Database = {
           payee_supplier?: string;
           description?: string;
           liters_counter?: number | null;
+          source_table?: string | null;
+          source_id?: string | null;
         };
         Relationships: [
           {
@@ -700,6 +716,68 @@ export type Database = {
           },
         ];
       };
+      receivable_settlements: {
+        Row: {
+          id: string;
+          transaction_id: string;
+          customer_id: string;
+          settlement_date: string;
+          amount: number;
+          payment_method: 'CASH' | 'GCASH' | 'BANK_TRANSFER' | 'CHECK' | 'OTHER';
+          reference_no: string;
+          remarks: string;
+          status: 'ACTIVE' | 'VOIDED';
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          voided_by: string | null;
+          voided_at: string | null;
+          void_reason: string;
+        };
+        Insert: {
+          id?: string;
+          transaction_id: string;
+          customer_id: string;
+          settlement_date?: string;
+          amount: number;
+          payment_method: 'CASH' | 'GCASH' | 'BANK_TRANSFER' | 'CHECK' | 'OTHER';
+          reference_no?: string;
+          remarks?: string;
+          status?: 'ACTIVE' | 'VOIDED';
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+          void_reason?: string;
+        };
+        Update: {
+          settlement_date?: string;
+          amount?: number;
+          payment_method?: 'CASH' | 'GCASH' | 'BANK_TRANSFER' | 'CHECK' | 'OTHER';
+          reference_no?: string;
+          remarks?: string;
+          status?: 'ACTIVE' | 'VOIDED';
+          updated_at?: string;
+          voided_by?: string | null;
+          voided_at?: string | null;
+          void_reason?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'receivable_settlements_transaction_id_fkey';
+            columns: ['transaction_id'];
+            referencedRelation: 'transactions';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'receivable_settlements_customer_id_fkey';
+            columns: ['customer_id'];
+            referencedRelation: 'customers';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       fuel_branches: {
         Row: {
           id: string;
@@ -819,6 +897,7 @@ export type Database = {
           unit_cost: number;
           total_amount: number;
           remarks: string;
+          expense_id: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -833,6 +912,7 @@ export type Database = {
           unit_cost: number;
           total_amount: number;
           remarks?: string;
+          expense_id?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -846,6 +926,7 @@ export type Database = {
           unit_cost?: number;
           total_amount?: number;
           remarks?: string;
+          expense_id?: string | null;
           created_by?: string | null;
           updated_at?: string;
         };
@@ -1050,6 +1131,10 @@ export type Database = {
           genset_1_running_minutes: number;
           genset_2_running_minutes: number;
           genset_4_running_minutes: number;
+          g1_volume_cbm: number;
+          three_fourth_volume_cbm: number;
+          s_three_fourth_volume_cbm: number;
+          s1c_volume_cbm: number;
           operation_hours: number;
           downtime_hours: number;
           total_dumps: number;
@@ -1059,6 +1144,8 @@ export type Database = {
           s_three_fourth_output: number;
           total_output: number;
           plant_capacity_tph: number;
+          total_volume_cbm: number;
+          plant_capacity_cbm_per_hour: number;
           notes: string;
           created_by: string | null;
           created_at: string;
@@ -1082,6 +1169,10 @@ export type Database = {
           genset_1_running_minutes?: number;
           genset_2_running_minutes?: number;
           genset_4_running_minutes?: number;
+          g1_volume_cbm?: number;
+          three_fourth_volume_cbm?: number;
+          s_three_fourth_volume_cbm?: number;
+          s1c_volume_cbm?: number;
           notes?: string;
           created_by?: string | null;
           created_at?: string;
@@ -1104,6 +1195,10 @@ export type Database = {
           genset_1_running_minutes?: number;
           genset_2_running_minutes?: number;
           genset_4_running_minutes?: number;
+          g1_volume_cbm?: number;
+          three_fourth_volume_cbm?: number;
+          s_three_fourth_volume_cbm?: number;
+          s1c_volume_cbm?: number;
           notes?: string;
           created_by?: string | null;
           updated_at?: string;
@@ -1117,9 +1212,116 @@ export type Database = {
           },
         ];
       };
+      sand_washing_daily_entries: {
+        Row: {
+          id: string;
+          entry_date: string;
+          product: 'Vibro' | '3/8-S1' | 'No Operation';
+          operation_minutes: number;
+          time_of_operation: string;
+          number_of_dumps: number;
+          genset_diesel_consumption_liters: number;
+          number_truck_waste: number;
+          waste_product: 'Waste' | '3/8' | 'N/A';
+          operation_hours: number;
+          vibro_sand_volume_cbm: number;
+          waste_volume_cbm: number;
+          diesel_consumption_lph: number;
+          notes: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          entry_date: string;
+          product?: 'Vibro' | '3/8-S1' | 'No Operation';
+          operation_minutes?: number;
+          time_of_operation?: string;
+          number_of_dumps?: number;
+          genset_diesel_consumption_liters?: number;
+          number_truck_waste?: number;
+          waste_product?: 'Waste' | '3/8' | 'N/A';
+          notes?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          entry_date?: string;
+          product?: 'Vibro' | '3/8-S1' | 'No Operation';
+          operation_minutes?: number;
+          time_of_operation?: string;
+          number_of_dumps?: number;
+          genset_diesel_consumption_liters?: number;
+          number_truck_waste?: number;
+          waste_product?: 'Waste' | '3/8' | 'N/A';
+          notes?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      quarry_site_daily_entries: {
+        Row: {
+          id: string;
+          entry_date: string;
+          jafcor_binder_trips: number;
+          jafcor_boulder_trips: number;
+          zaffara_boulder_trips: number;
+          number_of_trucks: string;
+          quarry_equipment_diesel_liters: number;
+          total_diesel_consumption_liters: number;
+          number_of_equipment: number;
+          total_boulder_trips: number;
+          binder_amount: number;
+          jafcor_boulder_amount: number;
+          total_computed_amount: number;
+          notes: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          entry_date: string;
+          jafcor_binder_trips?: number;
+          jafcor_boulder_trips?: number;
+          zaffara_boulder_trips?: number;
+          number_of_trucks?: string;
+          quarry_equipment_diesel_liters?: number;
+          total_diesel_consumption_liters?: number;
+          number_of_equipment?: number;
+          notes?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          entry_date?: string;
+          jafcor_binder_trips?: number;
+          jafcor_boulder_trips?: number;
+          zaffara_boulder_trips?: number;
+          number_of_trucks?: string;
+          quarry_equipment_diesel_liters?: number;
+          total_diesel_consumption_liters?: number;
+          number_of_equipment?: number;
+          notes?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
+      assign_user_group: {
+        Args: {
+          p_user_id: string;
+          p_role: string;
+        };
+        Returns: Database['public']['Tables']['app_users']['Row'];
+      };
       ensure_user_profile: {
         Args: Record<string, never>;
         Returns: Database['public']['Tables']['app_users']['Row'];
@@ -1247,6 +1449,49 @@ export type Database = {
         };
         Returns: Database['public']['Tables']['customer_credit_settlements']['Row'];
       };
+      get_transaction_receivable_amount: {
+        Args: {
+          p_payment_mode: string;
+          p_total_amount: number;
+          p_split_payment_details?: Json;
+        };
+        Returns: number;
+      };
+      settle_receivable: {
+        Args: {
+          p_transaction_id: string;
+          p_settlement_date?: string;
+          p_payment_method?: 'CASH' | 'GCASH' | 'BANK_TRANSFER' | 'CHECK' | 'OTHER';
+          p_reference_no?: string;
+          p_remarks?: string;
+        };
+        Returns: Database['public']['Tables']['receivable_settlements']['Row'];
+      };
+      void_receivable_settlement: {
+        Args: { p_settlement_id: string; p_reason: string };
+        Returns: Database['public']['Tables']['receivable_settlements']['Row'];
+      };
+      void_customer_credit_settlement: {
+        Args: { p_settlement_id: string; p_reason: string };
+        Returns: Database['public']['Tables']['customer_credit_settlements']['Row'];
+      };
+      get_receivable_settlement_history: {
+        Args: { p_limit?: number };
+        Returns: {
+          settlement_id: string;
+          settlement_kind: 'EXTERNAL' | 'CUSTOMER_CREDIT';
+          transaction_id: string;
+          dr_number: string;
+          customer_name: string;
+          settlement_date: string;
+          amount: number;
+          payment_method: string;
+          reference_no: string;
+          remarks: string;
+          status: 'ACTIVE' | 'VOIDED';
+          created_at: string;
+        }[];
+      };
       get_customer_credit_ledger: {
         Args: {
           p_customer_id: string;
@@ -1286,8 +1531,36 @@ export type Database = {
           p_liters: number;
           p_unit_cost: number;
           p_remarks?: string;
+          p_post_to_expenses?: boolean;
         };
         Returns: Database['public']['Tables']['fuel_purchases']['Row'];
+      };
+      post_fuel_purchase_to_expenses: {
+        Args: { p_purchase_id: string };
+        Returns: Database['public']['Tables']['fuel_purchases']['Row'];
+      };
+      create_user_group: {
+        Args: {
+          p_code: string | null;
+          p_name: string;
+          p_description?: string;
+        };
+        Returns: Database['public']['Tables']['sys_user_group']['Row'];
+      };
+      update_user_group: {
+        Args: {
+          p_group_id: string;
+          p_code: string;
+          p_name: string;
+          p_description?: string;
+        };
+        Returns: Database['public']['Tables']['sys_user_group']['Row'];
+      };
+      deactivate_user_group: {
+        Args: {
+          p_group_id: string;
+        };
+        Returns: Database['public']['Tables']['sys_user_group']['Row'];
       };
       create_fuel_issuance: {
         Args: {
@@ -1352,8 +1625,12 @@ export type FuelPurchase = Database['public']['Tables']['fuel_purchases']['Row']
 export type FuelIssuance = Database['public']['Tables']['fuel_issuances']['Row'];
 export type FuelInventoryLedger = Database['public']['Tables']['fuel_inventory_ledger']['Row'];
 export type CustomerCreditSettlement = Database['public']['Tables']['customer_credit_settlements']['Row'];
+export type ReceivableSettlement = Database['public']['Tables']['receivable_settlements']['Row'];
+export type ReceivableSettlementHistoryRow = Database['public']['Functions']['get_receivable_settlement_history']['Returns'][number];
 export type StoneCrusherMonthlyTarget = Database['public']['Tables']['stone_crusher_monthly_targets']['Row'];
 export type StoneCrusherDailyEntry = Database['public']['Tables']['stone_crusher_daily_entries']['Row'];
+export type SandWashingDailyEntry = Database['public']['Tables']['sand_washing_daily_entries']['Row'];
+export type QuarrySiteDailyEntry = Database['public']['Tables']['quarry_site_daily_entries']['Row'];
 
 export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
   old_data: Record<string, unknown> | null;

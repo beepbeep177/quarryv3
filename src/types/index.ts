@@ -11,6 +11,8 @@ export type NavSection =
   | 'hauler-offset-ledger'
   | 'operations'
   | 'operations-stone-crusher'
+  | 'operations-sand-washing'
+  | 'operations-quarry-site'
   | 'reports'
   | 'access-control';
 

@@ -5,6 +5,7 @@ import type { Customer } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 12;
 
@@ -28,6 +29,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ name?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
   const [page, setPage] = useState(1);
   const canManage = canAdd || canEdit || canDelete;
 
@@ -96,17 +98,22 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this customer? This cannot be undone.')) return;
+  function handleDelete(customer: Customer) {
+    setDeleteTarget(customer);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
     setSaveError('');
-    setDeletingId(id);
-    const { error } = await supabase.from('customers').delete().eq('id', id);
+    setDeletingId(deleteTarget.id);
+    const { error } = await supabase.from('customers').delete().eq('id', deleteTarget.id);
     if (error) {
       setSaveError(error.message);
       setDeletingId(null);
       return;
     }
-    setCustomers(prev => prev.filter(c => c.id !== id));
+    setCustomers(prev => prev.filter(c => c.id !== deleteTarget.id));
+    setDeleteTarget(null);
     setDeletingId(null);
   }
 
@@ -265,7 +272,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
                       )}
                       {canDelete && (
                         <button
-                          onClick={() => handleDelete(c.id)}
+                          onClick={() => handleDelete(c)}
                           disabled={deletingId === c.id}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
                           title="Delete"
@@ -284,6 +291,21 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
           </div>
         </div>
       )}
+
+      <ActionModal
+        open={!!deleteTarget}
+        title="Delete Customer"
+        description="This will permanently remove the customer from the masterlist."
+        variant="danger"
+        confirmLabel="Delete Customer"
+        loading={!!deleteTarget && deletingId === deleteTarget.id}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      >
+        <p className="text-sm text-slate-600">
+          Delete <span className="font-semibold text-slate-900">{deleteTarget?.name}</span>? This cannot be undone.
+        </p>
+      </ActionModal>
     </div>
   );
 }

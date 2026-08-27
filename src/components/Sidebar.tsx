@@ -19,7 +19,9 @@ import {
   ShieldCheck,
   Droplet,
   Factory,
+  Mountain,
   Settings,
+  Waves,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ActivityCode } from '../lib/database.types';
@@ -82,8 +84,8 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
     }
 
     const customerChildren = [
-      ...(can('CUSTOMERS_VIEW') ? [{ id: 'customers-list' as const, label: 'Masterlist', icon: <BookUser size={15} /> }] : []),
-      ...(can('ACCOUNTS_RECEIVABLE_VIEW') ? [{ id: 'customers-ar' as const, label: 'Accounts Receivable', icon: <ReceiptText size={15} /> }] : []),
+      ...(can('CUSTOMERS_VIEW') || can('CUSTOMERS_ADD') || can('CUSTOMERS_EDIT') || can('CUSTOMERS_DELETE') ? [{ id: 'customers-list' as const, label: 'Masterlist', icon: <BookUser size={15} /> }] : []),
+      ...(can('ACCOUNTS_RECEIVABLE_VIEW') || can('ACCOUNTS_RECEIVABLE_EDIT') ? [{ id: 'customers-ar' as const, label: 'Accounts Receivable', icon: <ReceiptText size={15} /> }] : []),
     ];
     if (customerChildren.length > 0) {
       items.push(
@@ -97,8 +99,8 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
     }
 
     const logisticsChildren = [
-      ...(can('TRUCKS_VIEW') ? [{ id: 'logistics-trucks' as const, label: 'Truck List', icon: <ListTodo size={15} /> }] : []),
-      ...(can('PRICING_VIEW') ? [{ id: 'logistics-pricing' as const, label: 'Pricing', icon: <DollarSign size={15} /> }] : []),
+      ...(can('TRUCKS_VIEW') || can('TRUCKS_ADD') || can('TRUCKS_EDIT') || can('TRUCKS_DELETE') ? [{ id: 'logistics-trucks' as const, label: 'Truck List', icon: <ListTodo size={15} /> }] : []),
+      ...(can('PRICING_VIEW') || can('PRICING_ADD') || can('PRICING_EDIT') || can('PRICING_DELETE') ? [{ id: 'logistics-pricing' as const, label: 'Pricing', icon: <DollarSign size={15} /> }] : []),
     ];
     if (logisticsChildren.length > 0) {
       items.push(
@@ -111,7 +113,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
-    if (can('EXPENSES_VIEW')) {
+    if (can('EXPENSES_VIEW') || can('EXPENSES_ADD') || can('EXPENSES_EDIT') || can('EXPENSES_DELETE')) {
       items.push(
         {
           id: 'expenses',
@@ -121,7 +123,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
-    if (can('FUEL_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+    if (can('FUEL_VIEW') || can('FUEL_PURCHASE_ADD') || can('FUEL_ISSUANCE_ADD') || can('FUEL_ADJUST') || can('FUEL_EXPORT') || can('FUEL_EQUIPMENT_MANAGE') || can('USER_GROUP_ACCESS_MANAGE')) {
       items.push(
         {
           id: 'fuel-management',
@@ -131,7 +133,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
-    if (can('HAULER_OFFSET_LEDGER_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+    if (can('HAULER_OFFSET_LEDGER_VIEW') || can('HAULER_OFFSET_LEDGER_ADD') || can('HAULER_OFFSET_LEDGER_ADJUST') || can('CUSTOMER_CREDIT_VIEW') || can('CUSTOMER_CREDIT_ADD') || can('CUSTOMER_CREDIT_ADJUST') || can('USER_GROUP_ACCESS_MANAGE')) {
       items.push(
         {
           id: 'hauler-offset-ledger',
@@ -169,7 +171,15 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       ...(can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
         ? [{ id: 'operations-stone-crusher' as const, label: 'Stone Crusher', icon: <Factory size={15} /> }]
         : []),
+      ...(can('SW_OPERATIONS_VIEW') || can('SW_OPERATIONS_ADD') || can('SW_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
+        ? [{ id: 'operations-sand-washing' as const, label: 'Sand Washing', icon: <Waves size={15} /> }]
+        : []),
+      ...(can('QS_OPERATIONS_VIEW') || can('QS_OPERATIONS_ADD') || can('QS_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
+        ? [{ id: 'operations-quarry-site' as const, label: 'Quarry Site', icon: <Mountain size={15} /> }]
+        : []),
     ];
+
+    if (children.length === 0) return [];
 
     return [
       {

@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { ExpenseWithCategory } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
 
@@ -37,6 +38,8 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
   const [internalLoading, setInternalLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseWithCategory | null>(null);
+  const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const isControlled = providedExpenses !== undefined;
   const expenses = providedExpenses ?? internalExpenses;
@@ -49,11 +52,13 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
 
   async function fetchExpenses() {
     setInternalLoading(true);
-    const { data } = await supabase
+    setError('');
+    const { data, error: fetchError } = await supabase
       .from('expenses')
       .select('*, expense_categories(*)')
       .order('expense_date', { ascending: false })
       .order('created_at', { ascending: false });
+    if (fetchError) setError(fetchError.message);
     setInternalExpenses((data ?? []) as ExpenseWithCategory[]);
     setInternalLoading(false);
   }
@@ -67,15 +72,26 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
     await fetchExpenses();
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this expense?')) return;
-    setDeletingId(id);
-    await supabase.from('expenses').delete().eq('id', id);
+  function handleDelete(expense: ExpenseWithCategory) {
+    setDeleteTarget(expense);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
+    setError('');
+    const { error: deleteError } = await supabase.from('expenses').delete().eq('id', deleteTarget.id);
+    if (deleteError) {
+      setError(deleteError.message);
+      setDeletingId(null);
+      return;
+    }
     if (isControlled) {
       await onRefresh?.();
     } else {
-      setInternalExpenses(prev => prev.filter(e => e.id !== id));
+      setInternalExpenses(prev => prev.filter(e => e.id !== deleteTarget.id));
     }
+    setDeleteTarget(null);
     setDeletingId(null);
   }
 
@@ -117,6 +133,8 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
         />
       </div>
 
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
@@ -145,12 +163,13 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
               <tbody className="divide-y divide-slate-100">
                 {pagedExpenses.map((exp, idx) => {
                   const colors = catColor(exp.expense_categories?.name);
+                  const isLinkedFuelExpense = exp.source_table === 'fuel_purchases';
                   return (
                     <tr
                       key={exp.id}
-                      onDoubleClick={() => canEdit && onEdit?.(exp)}
-                      title={canEdit ? 'Double-click to edit expense' : undefined}
-                      className={`hover:bg-slate-50 transition-colors group ${canEdit ? 'cursor-pointer' : ''}`}
+                      onDoubleClick={() => canEdit && !isLinkedFuelExpense && onEdit?.(exp)}
+                      title={isLinkedFuelExpense ? 'Managed from Fuel Management' : canEdit ? 'Double-click to edit expense' : undefined}
+                      className={`hover:bg-slate-50 transition-colors group ${canEdit && !isLinkedFuelExpense ? 'cursor-pointer' : ''}`}
                     >
                       <td className="px-5 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs whitespace-nowrap">
@@ -171,7 +190,10 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
                         </span>
                       </td>
                       <td className="px-4 py-3 text-slate-700 font-medium text-xs">{exp.payee_supplier}</td>
-                      <td className="px-4 py-3 text-slate-600 text-xs max-w-xs truncate">{exp.description || '—'}</td>
+                      <td className="px-4 py-3 text-slate-600 text-xs max-w-xs truncate">
+                        {exp.description || '—'}
+                        {isLinkedFuelExpense && <span className="ml-2 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Fuel Linked</span>}
+                      </td>
                       <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(exp.amount)}</td>
                       <td className="px-4 py-3 text-center">
                         {exp.liters_counter ? (
@@ -185,16 +207,16 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
                       </td>
                       {canDelete && (
                         <td className="px-4 py-3 text-center">
-                          <button
+                          {!isLinkedFuelExpense && <button
                             onClick={event => {
                               event.stopPropagation();
-                              handleDelete(exp.id);
+                              handleDelete(exp);
                             }}
                             disabled={deletingId === exp.id}
                             className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
                           >
                             <Trash2 size={14} />
-                          </button>
+                          </button>}
                         </td>
                       )}
                     </tr>
@@ -206,6 +228,33 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
           </div>
         )}
       </div>
+
+      <ActionModal
+        open={!!deleteTarget}
+        title="Delete Expense"
+        description="This will permanently remove the selected expense record."
+        variant="danger"
+        confirmLabel="Delete Expense"
+        loading={!!deleteTarget && deletingId === deleteTarget.id}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Delete <span className="font-semibold text-slate-900">{deleteTarget?.expense_categories?.name ?? 'expense'}</span> record?
+          </p>
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Payee</p>
+              <p className="mt-1 truncate font-medium text-slate-700">{deleteTarget?.payee_supplier ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Amount</p>
+              <p className="mt-1 font-bold text-slate-800">PHP {deleteTarget ? fmt(deleteTarget.amount) : '0.00'}</p>
+            </div>
+          </div>
+        </div>
+      </ActionModal>
     </div>
   );
 }

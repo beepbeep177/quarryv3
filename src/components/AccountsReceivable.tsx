@@ -1,32 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, ReceiptText, CheckCircle, Search, TrendingDown, Download, FileText } from 'lucide-react';
+import { CheckCircle, Download, FileText, History, ReceiptText, RefreshCw, RotateCcw, Search, TrendingDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { CustomerCreditEntry, TransactionWithRelations } from '../lib/database.types';
+import type { CustomerCreditEntry, ReceivableSettlementHistoryRow, TransactionWithRelations } from '../lib/database.types';
+import { getReceivableAmount, getReceivableModeLabel } from '../lib/payment';
+import { fetchAllPages } from '../lib/fetchAll';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
+const inputClass = 'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200';
 
-function fmt(v: number) {
-  return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+type SettlementMethod = 'CASH' | 'GCASH' | 'BANK_TRANSFER' | 'CHECK' | 'OTHER';
+type ReceivableRecord = TransactionWithRelations & { amountDue: number; modeLabel: string };
+
+function fmt(value: number) {
+  return value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatVolume(v: number) {
-  return v.toFixed(2);
+function formatVolume(value: number) {
+  return value.toFixed(2);
 }
 
 function fmtDate(dateStr: string) {
-  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function todayInput() {
   const today = new Date();
-  return [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, '0'),
-    String(today.getDate()).padStart(2, '0'),
-  ].join('-');
+  return [today.getFullYear(), String(today.getMonth() + 1).padStart(2, '0'), String(today.getDate()).padStart(2, '0')].join('-');
 }
 
 function htmlEscape(value: string | number) {
@@ -56,311 +59,223 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 }
 
 export default function AccountsReceivable({ canEdit = false }: { canEdit?: boolean }) {
-  const [records, setRecords] = useState<TransactionWithRelations[]>([]);
+  const [records, setRecords] = useState<ReceivableRecord[]>([]);
+  const [history, setHistory] = useState<ReceivableSettlementHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [markingId, setMarkingId] = useState<string | null>(null);
-  const [settlingId, setSettlingId] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
   const [customerCreditBalances, setCustomerCreditBalances] = useState<Record<string, number>>({});
   const [actionError, setActionError] = useState('');
+  const [infoModal, setInfoModal] = useState('');
   const [page, setPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [settlementTarget, setSettlementTarget] = useState<ReceivableRecord | null>(null);
+  const [voidTarget, setVoidTarget] = useState<ReceivableSettlementHistoryRow | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [settlementForm, setSettlementForm] = useState({
+    settlement_date: todayInput(),
+    payment_method: 'CASH' as SettlementMethod,
+    reference_no: '',
+    remarks: '',
+  });
 
-  useEffect(() => { fetchAR(); }, []);
+  useEffect(() => { void fetchAR(); }, []);
   useEffect(() => { setPage(1); }, [search]);
 
   async function fetchAR() {
     setLoading(true);
     setActionError('');
-    const [transactionsResult, creditResult] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('*, customers(*), trucks(*)')
-        .in('payment_mode', ['P.O', 'OFFSET'])
-        .eq('status', 'PENDING')
-        .order('transaction_date', { ascending: true }),
-      supabase
-        .from('customer_credit_entries')
-        .select('customer_id, debit_amount, credit_amount, status')
-        .eq('status', 'ACTIVE'),
+
+    const [transactionsResult, creditResult, historyResult] = await Promise.all([
+      fetchAllPages<TransactionWithRelations>(async (from, to) => {
+        const result = await supabase
+          .from('transactions')
+          .select('*, customers(*), trucks(*)')
+          .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
+          .eq('status', 'PENDING')
+          .order('transaction_date', { ascending: true })
+          .range(from, to);
+        return { data: result.data as TransactionWithRelations[] | null, error: result.error };
+      }),
+      fetchAllPages<Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>>(async (from, to) => {
+        const result = await supabase
+          .from('customer_credit_entries')
+          .select('customer_id, debit_amount, credit_amount, status')
+          .eq('status', 'ACTIVE')
+          .range(from, to);
+        return { data: result.data, error: result.error };
+      }),
+      supabase.rpc('get_receivable_settlement_history', { p_limit: 200 }),
     ]);
-    setRecords((transactionsResult.data ?? []) as TransactionWithRelations[]);
-    const creditRows = (creditResult.data ?? []) as Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>[];
-    setCustomerCreditBalances(creditRows.reduce<Record<string, number>>((map, row) => {
+
+    const firstError = transactionsResult.error || creditResult.error || historyResult.error;
+    if (firstError) setActionError(firstError.message);
+
+    setRecords((transactionsResult.data ?? [])
+      .map(transaction => ({
+        ...transaction,
+        amountDue: getReceivableAmount(transaction),
+        modeLabel: getReceivableModeLabel(transaction),
+      }))
+      .filter(transaction => transaction.amountDue > 0));
+
+    setCustomerCreditBalances((creditResult.data ?? []).reduce<Record<string, number>>((map, row) => {
       map[row.customer_id] = (map[row.customer_id] ?? 0) + Number(row.credit_amount ?? 0) - Number(row.debit_amount ?? 0);
       return map;
     }, {}));
+    setHistory((historyResult.data ?? []) as ReceivableSettlementHistoryRow[]);
     setLoading(false);
   }
 
-  async function markPaid(id: string) {
-    setMarkingId(id);
-    setActionError('');
-    const { error } = await supabase.from('transactions').update({ status: 'PAID' }).eq('id', id);
-    if (error) {
-      setActionError(error.message);
-    } else {
-      setRecords(prev => prev.filter(r => r.id !== id));
-    }
-    setMarkingId(null);
-  }
-
-  async function settleWithCredit(record: TransactionWithRelations) {
-    setSettlingId(record.id);
+  async function settleWithCredit(record: ReceivableRecord) {
+    setSavingId(record.id);
     setActionError('');
     const { error } = await supabase.rpc('settle_receivable_with_customer_credit', {
       p_transaction_id: record.id,
       p_settlement_date: todayInput(),
       p_remarks: 'Settled from Accounts Receivable',
     });
-
+    setSavingId(null);
     if (error) {
       setActionError(error.message);
-    } else {
-      await fetchAR();
+      return;
     }
-    setSettlingId(null);
+    await fetchAR();
   }
 
-  const filtered = records.filter(r => {
-    const q = search.toLowerCase();
-    return !q || (r.customers?.name ?? '').toLowerCase().includes(q) || r.dr_number.toLowerCase().includes(q);
-  });
+  async function saveSettlement() {
+    if (!settlementTarget) return;
+    setSavingId(settlementTarget.id);
+    setActionError('');
+    const { error } = await supabase.rpc('settle_receivable', {
+      p_transaction_id: settlementTarget.id,
+      p_settlement_date: settlementForm.settlement_date,
+      p_payment_method: settlementForm.payment_method,
+      p_reference_no: settlementForm.reference_no.trim(),
+      p_remarks: settlementForm.remarks.trim(),
+    });
+    setSavingId(null);
+    if (error) {
+      setActionError(error.message);
+      return;
+    }
+    setSettlementTarget(null);
+    setSettlementForm({ settlement_date: todayInput(), payment_method: 'CASH', reference_no: '', remarks: '' });
+    await fetchAR();
+  }
 
-  const totalPending = filtered.reduce((s, r) => s + (r.total_amount ?? 0), 0);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
+  async function voidSettlement() {
+    if (!voidTarget || !voidReason.trim()) return;
+    setSavingId(voidTarget.settlement_id);
+    setActionError('');
+    const { error } = voidTarget.settlement_kind === 'CUSTOMER_CREDIT'
+      ? await supabase.rpc('void_customer_credit_settlement', { p_settlement_id: voidTarget.settlement_id, p_reason: voidReason.trim() })
+      : await supabase.rpc('void_receivable_settlement', { p_settlement_id: voidTarget.settlement_id, p_reason: voidReason.trim() });
+    setSavingId(null);
+    if (error) {
+      setActionError(error.message);
+      return;
+    }
+    setVoidTarget(null);
+    setVoidReason('');
+    await fetchAR();
+  }
+
+  const filtered = useMemo(() => records.filter(record => {
+    const query = search.toLowerCase();
+    return !query
+      || (record.customers?.name ?? '').toLowerCase().includes(query)
+      || record.dr_number.toLowerCase().includes(query)
+      || record.modeLabel.toLowerCase().includes(query);
+  }), [records, search]);
+
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const pagedRecords = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
-
-  const uniqueCustomerNames = useMemo(() => {
-    const names = new Set(filtered.map(r => r.customers?.name ?? '').filter(Boolean));
-    return [...names];
-  }, [filtered]);
+  const currentHistoryPage = Math.min(historyPage, Math.max(1, Math.ceil(history.length / PAGE_SIZE)));
+  const pagedHistory = useMemo(() => paginate(history, currentHistoryPage, PAGE_SIZE), [history, currentHistoryPage]);
+  const totalPending = filtered.reduce((sum, record) => sum + record.amountDue, 0);
+  const totalVolume = filtered.reduce((sum, record) => sum + (record.volume_m3 ?? 0), 0);
 
   function exportCsv() {
-    if (filtered.length === 0) { alert('No records to export.'); return; }
-    const headers = ['Date', 'DR Number', 'Customer', 'Volume (m3)', 'Amount', 'Mode', 'Payment Status'];
-    const rows = filtered.map(r => [
-      fmtDate(r.transaction_date),
-      r.dr_number,
-      r.customers?.name ?? '',
-      r.volume_m3 ?? 0,
-      r.total_amount ?? 0,
-      r.payment_mode,
-      r.status,
-    ]);
-    const totalRow = ['TOTAL', '', '', filtered.reduce((s, r) => s + (r.volume_m3 ?? 0), 0), totalPending, '', ''];
-    const filterLine = search ? `Filter: ${search}` : 'All pending P.O and OFFSET transactions';
+    if (filtered.length === 0) { setInfoModal('No records to export.'); return; }
+    const rows = filtered.map(record => [record.transaction_date, record.dr_number, record.customers?.name ?? '', formatVolume(record.volume_m3 ?? 0), record.modeLabel, record.total_amount, record.amountDue]);
     const lines = [
-      [`Accounts Receivable Report`],
-      [filterLine],
+      ['Accounts Receivable'],
       [`Generated: ${new Date().toLocaleString('en-PH')}`],
       [],
-      headers,
+      ['Date', 'DR #', 'Customer', 'Volume (m3)', 'Mode', 'Transaction Total', 'Amount Due'],
       ...rows,
-      totalRow,
+      ['', '', 'Total', formatVolume(totalVolume), '', '', totalPending],
     ];
-    const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
-    const slug = search ? search.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : 'all';
-    downloadTextFile(`accounts-receivable-${slug}-${new Date().toISOString().split('T')[0]}.csv`, csv, 'text/csv;charset=utf-8');
+    downloadTextFile('accounts-receivable.csv', `\uFEFF${lines.map(row => row.map(csvEscape).join(',')).join('\r\n')}`, 'text/csv;charset=utf-8');
   }
 
   function exportPdf() {
-    if (filtered.length === 0) { alert('No records to export.'); return; }
-    const generated = new Date().toLocaleString('en-PH');
-    const isSingleCustomer = uniqueCustomerNames.length === 1;
-    const reportTitle = isSingleCustomer
-      ? `Statement of Account — ${uniqueCustomerNames[0]}`
-      : 'Accounts Receivable Report';
-    const filterNote = search ? `Filter: ${htmlEscape(search)}` : 'All pending P.O and OFFSET transactions';
-    const totalVolume = filtered.reduce((s, r) => s + (r.volume_m3 ?? 0), 0);
-
-    const rowsHtml = filtered.map(r => `
-      <tr>
-        <td>${htmlEscape(fmtDate(r.transaction_date))}</td>
-        <td>${htmlEscape(r.dr_number)}</td>
-        <td>${htmlEscape(r.customers?.name ?? '—')}</td>
-        <td class="num">${htmlEscape(formatVolume(r.volume_m3 ?? 0))}</td>
-        <td>${htmlEscape(r.payment_mode)}</td>
-        <td class="num">₱${htmlEscape(fmt(r.total_amount ?? 0))}</td>
-      </tr>`).join('');
-
+    if (filtered.length === 0) { setInfoModal('No records to export.'); return; }
     const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Please allow pop-ups to export the report PDF.');
-      return;
-    }
-    printWindow.document.write(`<!doctype html>
-      <html>
-        <head>
-          <title>${htmlEscape(reportTitle)}</title>
-          <style>
-            body { font-family: Arial, sans-serif; color: #0f172a; margin: 32px; }
-            h1 { font-size: 20px; margin: 0 0 4px; }
-            .subtitle { color: #92400e; font-size: 12px; margin: 0 0 16px; }
-            .meta { color: #475569; font-size: 11px; line-height: 1.55; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; font-size: 11px; }
-            th { text-align: left; background: #f1f5f9; color: #475569; text-transform: uppercase; letter-spacing: .03em; }
-            th, td { border: 1px solid #e2e8f0; padding: 7px 8px; }
-            td.num, th.num { text-align: right; }
-            tfoot td { background: #0f172a; color: white; font-weight: 700; }
-            tfoot td.num { text-align: right; }
-            @media print { body { margin: 18mm; } }
-          </style>
-        </head>
-        <body>
-          <h1>${htmlEscape(reportTitle)}</h1>
-          <p class="subtitle">Pending P.O and OFFSET Transactions</p>
-          <div class="meta">
-            <div>${filterNote}</div>
-            <div>Generated: ${htmlEscape(generated)}</div>
-            <div>${filtered.length} pending transaction${filtered.length !== 1 ? 's' : ''} &nbsp;|&nbsp; Total Outstanding: ₱${htmlEscape(fmt(totalPending))}</div>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>DR #</th>
-                <th>Customer</th>
-                <th class="num">Volume (m³)</th>
-                <th class="num">Mode</th>
-                <th class="num">Amount Due</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml || `<tr><td colspan="6">No records found.</td></tr>`}</tbody>
-            <tfoot>
-              <tr>
-                <td colspan="3">Total Outstanding</td>
-                <td class="num">${htmlEscape(formatVolume(totalVolume))} m³</td>
-                <td></td>
-                <td class="num">₱${htmlEscape(fmt(totalPending))}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </body>
-      </html>`);
+    if (!printWindow) { setInfoModal('Please allow pop-ups to export the report PDF.'); return; }
+    const rowsHtml = filtered.map(record => `<tr>
+      <td>${htmlEscape(fmtDate(record.transaction_date))}</td><td>${htmlEscape(record.dr_number)}</td>
+      <td>${htmlEscape(record.customers?.name ?? '')}</td><td class="num">${htmlEscape(formatVolume(record.volume_m3 ?? 0))}</td>
+      <td>${htmlEscape(record.modeLabel)}</td><td class="num">PHP ${htmlEscape(fmt(record.amountDue))}</td>
+    </tr>`).join('');
+    printWindow.document.write(`<!doctype html><html><head><title>Accounts Receivable</title><style>
+      body{font-family:Arial,sans-serif;color:#0f172a;margin:32px}h1{font-size:22px;margin:0 0 6px}.meta{color:#64748b;font-size:12px;margin-bottom:18px}
+      table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #e2e8f0;padding:7px 8px}th{background:#f1f5f9;text-align:left}.num{text-align:right}tfoot td{background:#0f172a;color:#fff;font-weight:700}@media print{body{margin:18mm}}
+      </style></head><body><h1>Accounts Receivable</h1><div class="meta">Pending P.O/OFFSET portions, including split payments<br>Generated: ${htmlEscape(new Date().toLocaleString('en-PH'))}</div>
+      <table><thead><tr><th>Date</th><th>DR #</th><th>Customer</th><th class="num">Volume</th><th>Mode</th><th class="num">Amount Due</th></tr></thead>
+      <tbody>${rowsHtml}</tbody><tfoot><tr><td colspan="3">Total Outstanding</td><td class="num">${htmlEscape(formatVolume(totalVolume))} m3</td><td></td><td class="num">PHP ${htmlEscape(fmt(totalPending))}</td></tr></tfoot></table></body></html>`);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
   }
 
-
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Accounts Receivable</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Pending P.O and OFFSET transactions</p>
-        </div>
-        <button onClick={fetchAR} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
-          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-        </button>
+      <div className="flex items-center justify-between gap-3">
+        <div><h1 className="text-2xl font-bold text-slate-800">Accounts Receivable</h1><p className="mt-0.5 text-sm text-slate-500">Pending P.O and OFFSET amounts, including split payments</p></div>
+        <button onClick={() => void fetchAR()} disabled={loading} className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100" title="Refresh"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
       </div>
 
-      {!canEdit && <ReadOnlyNotice message="This user group can review outstanding balances only." />}
+      {!canEdit && <ReadOnlyNotice message="This user group can review outstanding balances and settlements only." />}
+      {actionError && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{actionError}</div>}
 
-      {actionError && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {actionError}
-        </div>
-      )}
-
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-4">
-        <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
-          <TrendingDown size={22} className="text-amber-600" />
-        </div>
-        <div>
-          <p className="text-sm text-amber-700 font-medium">Total Outstanding</p>
-          <p className="text-2xl font-bold text-amber-800 tabular-nums">₱{fmt(totalPending)}</p>
-          <p className="text-xs text-amber-600">{filtered.length} pending transaction{filtered.length !== 1 ? 's' : ''}</p>
-        </div>
+      <div className="flex items-center gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-amber-100"><TrendingDown size={22} className="text-amber-600" /></div>
+        <div><p className="text-sm font-medium text-amber-700">Total Outstanding</p><p className="text-2xl font-bold tabular-nums text-amber-800">PHP {fmt(totalPending)}</p><p className="text-xs text-amber-600">{filtered.length} pending transaction{filtered.length !== 1 ? 's' : ''}</p></div>
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative max-w-sm flex-1 min-w-48">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input type="text" placeholder="Search customer or DR#..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
-        </div>
-        <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
-          <Download size={15} />
-          CSV
-        </button>
-        <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
-          <FileText size={15} />
-          PDF
-        </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-48 max-w-sm flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search customer, DR, or mode..." className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200" /></div>
+        <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"><Download size={15} /> CSV</button>
+        <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"><FileText size={15} /> PDF</button>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {loading ? (
-          <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
-            <RefreshCw size={16} className="animate-spin" /> Loading...
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="py-16 text-center">
-            <ReceiptText size={32} className="text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm font-medium">No outstanding receivables</p>
-            <p className="text-slate-400 text-xs mt-1">All accounts are settled!</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-                  <th className="px-4 py-3 text-left">Date</th>
-                  <th className="px-4 py-3 text-left">DR #</th>
-                  <th className="px-4 py-3 text-left">Customer</th>
-                  <th className="px-4 py-3 text-right">Volume (m³)</th>
-                  <th className="px-4 py-3 text-right">Total Amount</th>
-                  <th className="px-4 py-3 text-center">Mode</th>
-                  {canEdit && <th className="px-4 py-3 text-center">Action</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {pagedRecords.map(r => (
-                  <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
-                      {new Date(r.transaction_date + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </td>
-                    <td className="px-4 py-3 font-mono font-semibold text-slate-700">{r.dr_number}</td>
-                    <td className="px-4 py-3 text-slate-700">{r.customers?.name ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-semibold">{formatVolume(r.volume_m3 ?? 0)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums font-bold text-slate-800">₱{fmt(r.total_amount)}</td>
-                      <td className="px-4 py-3 text-center">
-                        {r.payment_mode === 'P.O'
-                          ? <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">P.O</span>
-                          : <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">OFFSET</span>}
-                      </td>
-                    {canEdit && (
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => settleWithCredit(r)}
-                            disabled={settlingId === r.id || markingId === r.id || (customerCreditBalances[r.customer_id] ?? 0) < (r.total_amount ?? 0)}
-                            title={(customerCreditBalances[r.customer_id] ?? 0) < (r.total_amount ?? 0) ? `Insufficient customer credit: PHP ${fmt(customerCreditBalances[r.customer_id] ?? 0)}` : 'Settle using customer credit'}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-500 hover:bg-teal-600 text-white text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {settlingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                            Use Credit
-                          </button>
-                          <button
-                            onClick={() => markPaid(r.id)}
-                            disabled={markingId === r.id || settlingId === r.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors disabled:opacity-60"
-                          >
-                            {markingId === r.id ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                            Mark Paid
-                          </button>
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
-          </div>
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        {loading ? <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"><RefreshCw size={16} className="animate-spin" /> Loading...</div> : filtered.length === 0 ? <div className="py-16 text-center"><ReceiptText size={32} className="mx-auto mb-3 text-slate-300" /><p className="text-sm font-medium text-slate-500">No outstanding receivables</p></div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead><tr className="bg-slate-50 text-xs font-semibold uppercase text-slate-500"><th className="px-4 py-3 text-left">Date</th><th className="px-4 py-3 text-left">DR #</th><th className="px-4 py-3 text-left">Customer</th><th className="px-4 py-3 text-right">Volume</th><th className="px-4 py-3 text-right">Total</th><th className="px-4 py-3 text-right">Amount Due</th><th className="px-4 py-3 text-center">Mode</th>{canEdit && <th className="px-4 py-3 text-center">Actions</th>}</tr></thead>
+            <tbody className="divide-y divide-slate-100">{pagedRecords.map(record => <tr key={record.id} className="hover:bg-slate-50">
+              <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{fmtDate(record.transaction_date)}</td><td className="px-4 py-3 font-mono font-semibold text-slate-700">{record.dr_number}</td><td className="px-4 py-3 text-slate-700">{record.customers?.name ?? '-'}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-emerald-600">{formatVolume(record.volume_m3 ?? 0)}</td><td className="px-4 py-3 text-right tabular-nums text-slate-500">PHP {fmt(record.total_amount)}</td><td className="px-4 py-3 text-right font-bold tabular-nums text-slate-800">PHP {fmt(record.amountDue)}</td><td className="px-4 py-3 text-center"><span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-700">{record.modeLabel}</span></td>
+              {canEdit && <td className="px-4 py-3"><div className="flex items-center justify-center gap-2"><button onClick={() => void settleWithCredit(record)} disabled={savingId === record.id || (customerCreditBalances[record.customer_id] ?? 0) < record.amountDue} title={(customerCreditBalances[record.customer_id] ?? 0) < record.amountDue ? `Insufficient credit: PHP ${fmt(customerCreditBalances[record.customer_id] ?? 0)}` : 'Settle using customer credit'} className="rounded-lg bg-teal-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-40">Use Credit</button><button onClick={() => setSettlementTarget(record)} disabled={savingId === record.id} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"><CheckCircle size={12} /> Record Payment</button></div></td>}
+            </tr>)}</tbody>
+          </table><Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} /></div>
         )}
       </div>
+
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4"><History size={17} className="text-slate-500" /><h2 className="font-semibold text-slate-800">Recent Settlements</h2></div>
+        {history.length === 0 ? <div className="py-10 text-center text-sm text-slate-400">No settlement history yet</div> : <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr className="bg-slate-50 text-xs font-semibold uppercase text-slate-500"><th className="px-4 py-3 text-left">Date</th><th className="px-4 py-3 text-left">DR #</th><th className="px-4 py-3 text-left">Customer</th><th className="px-4 py-3 text-left">Method</th><th className="px-4 py-3 text-left">Reference</th><th className="px-4 py-3 text-right">Amount</th><th className="px-4 py-3 text-center">Status</th>{canEdit && <th className="px-4 py-3" />}</tr></thead>
+          <tbody className="divide-y divide-slate-100">{pagedHistory.map(row => <tr key={`${row.settlement_kind}-${row.settlement_id}`}><td className="px-4 py-3 text-xs text-slate-500">{fmtDate(row.settlement_date)}</td><td className="px-4 py-3 font-mono font-semibold text-slate-700">{row.dr_number}</td><td className="px-4 py-3 text-slate-700">{row.customer_name}</td><td className="px-4 py-3 text-slate-600">{row.payment_method.replace('_', ' ')}</td><td className="px-4 py-3 text-slate-500">{row.reference_no || '-'}</td><td className="px-4 py-3 text-right font-semibold tabular-nums">PHP {fmt(row.amount)}</td><td className="px-4 py-3 text-center"><span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${row.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{row.status}</span></td>{canEdit && <td className="px-4 py-3 text-center">{row.status === 'ACTIVE' && <button onClick={() => setVoidTarget(row)} className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Void settlement"><RotateCcw size={14} /></button>}</td>}</tr>)}</tbody>
+        </table><Pagination page={currentHistoryPage} pageSize={PAGE_SIZE} totalItems={history.length} onPageChange={setHistoryPage} /></div>}
+      </div>
+
+      <ActionModal open={!!settlementTarget} title="Record Receivable Payment" description={settlementTarget ? `${settlementTarget.dr_number} - PHP ${fmt(settlementTarget.amountDue)} due` : ''} variant="success" confirmLabel="Record Payment" loading={!!settlementTarget && savingId === settlementTarget.id} onClose={() => setSettlementTarget(null)} onConfirm={saveSettlement}>
+        <div className="space-y-4"><label className="block text-xs font-semibold uppercase text-slate-500">Payment Date<input type="date" value={settlementForm.settlement_date} onChange={event => setSettlementForm(form => ({ ...form, settlement_date: event.target.value }))} className={`${inputClass} mt-1.5`} /></label><label className="block text-xs font-semibold uppercase text-slate-500">Payment Method<select value={settlementForm.payment_method} onChange={event => setSettlementForm(form => ({ ...form, payment_method: event.target.value as SettlementMethod }))} className={`${inputClass} mt-1.5`}><option value="CASH">Cash</option><option value="GCASH">GCash</option><option value="BANK_TRANSFER">Bank Transfer</option><option value="CHECK">Check</option><option value="OTHER">Other</option></select></label><label className="block text-xs font-semibold uppercase text-slate-500">OR / Reference<input value={settlementForm.reference_no} onChange={event => setSettlementForm(form => ({ ...form, reference_no: event.target.value }))} className={`${inputClass} mt-1.5`} placeholder="Optional reference" /></label><label className="block text-xs font-semibold uppercase text-slate-500">Remarks<textarea value={settlementForm.remarks} onChange={event => setSettlementForm(form => ({ ...form, remarks: event.target.value }))} className={`${inputClass} mt-1.5 resize-none`} rows={2} placeholder="Optional remarks" /></label></div>
+      </ActionModal>
+      <ActionModal open={!!voidTarget} title="Void Settlement" description="This reopens the receivable and preserves the settlement as voided history." variant="danger" confirmLabel="Void Settlement" loading={!!voidTarget && savingId === voidTarget.settlement_id} onClose={() => { setVoidTarget(null); setVoidReason(''); }} onConfirm={voidSettlement}><label className="block text-xs font-semibold uppercase text-slate-500">Reason<input value={voidReason} onChange={event => setVoidReason(event.target.value)} className={`${inputClass} mt-1.5`} placeholder="Required reason" /></label></ActionModal>
+      <ActionModal open={!!infoModal} title="Export Notice" description={infoModal} variant="info" confirmLabel="Got It" showCancel={false} onClose={() => setInfoModal('')} onConfirm={() => setInfoModal('')} />
     </div>
   );
 }

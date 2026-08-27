@@ -21,6 +21,8 @@ import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import { getPaymentModeAmount } from '../lib/payment';
 import ExpensesLedger from './ExpensesLedger';
+import { fetchAllPages } from '../lib/fetchAll';
+import ActionModal from './ActionModal';
 
 export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
@@ -467,10 +469,12 @@ interface ReportsProps {
   initialTab?: ReportTab;
   refreshKey?: number;
   canEditTransactions?: boolean;
+  canExport?: boolean;
+  canPrint?: boolean;
   onEditTransaction?: (tx: TransactionWithRelations) => void;
 }
 
-export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditTransactions = false, onEditTransaction }: ReportsProps) {
+export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditTransactions = false, canExport = false, canPrint = false, onEditTransaction }: ReportsProps) {
   const today = useMemo(() => toInputDate(new Date()), []);
   const defaultFrom = useMemo(() => addDays(today, -6), [today]);
   const currentMonth = useMemo(() => toMonthInput(new Date()), []);
@@ -505,6 +509,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
   // Modal state for transaction details
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithRelations | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [infoModal, setInfoModal] = useState('');
 
   const range = useMemo(
     () => getDateRangeSummary(periodMode, dateFrom, dateTo, selectedMonth, selectedYear),
@@ -518,11 +523,11 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
 
   const fetchCustomers = useCallback(async () => {
     setCustomerLoading(true);
-    const { data } = await supabase
-      .from('customers')
-      .select('*')
-      .order('name', { ascending: true });
-    setCustomers((data ?? []) as Customer[]);
+    const result = await fetchAllPages<Customer>(async (from, to) => {
+      const page = await supabase.from('customers').select('*').order('name', { ascending: true }).range(from, to);
+      return { data: page.data as Customer[] | null, error: page.error };
+    });
+    setCustomers(result.data);
     setCustomerLoading(false);
   }, []);
 
@@ -531,20 +536,28 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     setError('');
 
     const [transactionResult, expenseResult] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('*, customers(*), trucks(*)')
-        .gte('transaction_date', range.start)
-        .lte('transaction_date', range.end)
-        .order('transaction_date', { ascending: false })
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('expenses')
-        .select('*, expense_categories(*)')
-        .gte('expense_date', range.start)
-        .lte('expense_date', range.end)
-        .order('expense_date', { ascending: false })
-        .order('created_at', { ascending: false }),
+      fetchAllPages<TransactionWithRelations>(async (from, to) => {
+        const page = await supabase
+          .from('transactions')
+          .select('*, customers(*), trucks(*)')
+          .gte('transaction_date', range.start)
+          .lte('transaction_date', range.end)
+          .order('transaction_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: page.data as TransactionWithRelations[] | null, error: page.error };
+      }),
+      fetchAllPages<ExpenseWithCategory>(async (from, to) => {
+        const page = await supabase
+          .from('expenses')
+          .select('*, expense_categories(*)')
+          .gte('expense_date', range.start)
+          .lte('expense_date', range.end)
+          .order('expense_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: page.data as ExpenseWithCategory[] | null, error: page.error };
+      }),
     ]);
 
     if (transactionResult.error || expenseResult.error) {
@@ -555,8 +568,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       setError(messages.join(' • ') || 'Unable to load report data.');
     }
 
-    setTransactions((transactionResult.data ?? []) as TransactionWithRelations[]);
-    setExpenses((expenseResult.data ?? []) as ExpenseWithCategory[]);
+    setTransactions(transactionResult.data);
+    setExpenses(expenseResult.data);
     setLoading(false);
   }, [range.end, range.start]);
 
@@ -984,7 +997,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       : '';
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
-      alert('Please allow pop-ups to export the report PDF.');
+      setInfoModal('Please allow pop-ups to export the report PDF.');
       return;
     }
 
@@ -1245,14 +1258,18 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           <p className="text-slate-500 text-sm mt-0.5">Sales, customer performance, and net income views</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
-            <Download size={15} />
-            CSV
-          </button>
-          <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
-            <FileText size={15} />
-            PDF
-          </button>
+          {canExport && (
+            <button onClick={exportCsv} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+              <Download size={15} />
+              CSV
+            </button>
+          )}
+          {canPrint && (
+            <button onClick={exportPdf} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-sm font-semibold transition-colors">
+              <FileText size={15} />
+              PDF
+            </button>
+          )}
           <button onClick={fetchReportData} disabled={loading} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -2056,6 +2073,17 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           </div>
         </>
       )}
+
+      <ActionModal
+        open={!!infoModal}
+        title="Export Notice"
+        description={infoModal}
+        variant="info"
+        confirmLabel="Got It"
+        showCancel={false}
+        onClose={() => setInfoModal('')}
+        onConfirm={() => setInfoModal('')}
+      />
     </div>
   );
 }

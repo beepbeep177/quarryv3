@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCheck, Copy, Eye, EyeOff, History, KeyRound, Loader2, RefreshCcw, RefreshCw, Save, Search, ShieldCheck, UserPlus } from 'lucide-react';
+import { CheckCheck, ChevronDown, ChevronRight, Copy, Eye, EyeOff, History, KeyRound, Loader2, Pencil, PlusCircle, RefreshCcw, RefreshCw, Save, Search, ShieldCheck, Trash2, UserPlus, X } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { AccessActivity, AccessModule, AccessSubModule, ActivityCode, AppUser, AuditLog, UserGroup, UserGroupActivity, UserRole } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const USERS_PAGE_SIZE = 8;
 const AUDIT_PAGE_SIZE = 10;
@@ -38,6 +39,10 @@ function generatePassword(length = 12): string {
 
 function formatTableName(tableName: string) {
   return tableName.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function normalizeGroupCode(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 function describeAudit(log: AuditLog) {
@@ -75,7 +80,18 @@ export default function AccessControl() {
   const [accessMessage, setAccessMessage] = useState('');
   const [accessError, setAccessError] = useState('');
   const [permissionSearch, setPermissionSearch] = useState('');
+  const [collapsedModuleIds, setCollapsedModuleIds] = useState<Set<string>>(new Set());
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupForm, setGroupForm] = useState({ name: '', code: '', description: '' });
+  const [groupCodeTouched, setGroupCodeTouched] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editGroupForm, setEditGroupForm] = useState({ name: '', code: '', description: '' });
+  const [savingGroup, setSavingGroup] = useState(false);
+  const [groupError, setGroupError] = useState('');
+  const [groupMessage, setGroupMessage] = useState('');
+  const [deactivateTarget, setDeactivateTarget] = useState<UserGroup | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState('');
   const [usersPage, setUsersPage] = useState(1);
   const [auditPage, setAuditPage] = useState(1);
 
@@ -97,7 +113,7 @@ export default function AccessControl() {
     fetchData();
   }, []);
 
-  async function fetchData() {
+  async function fetchData(preferredGroupId?: string) {
     setLoading(true);
     setAccessError('');
 
@@ -160,7 +176,13 @@ export default function AccessControl() {
     const nextSubModules = (subModulesData ?? []) as AccessSubModule[];
     const nextActivities = (activitiesData ?? []) as AccessActivity[];
     const nextMappings = (mappingsData ?? []) as MappingRow[];
-    const nextSelectedGroupId = selectedGroupId || nextGroups[0]?.id || '';
+    const currentGroupStillExists = selectedGroupId && nextGroups.some(group => group.id === selectedGroupId);
+    const preferredGroupExists = preferredGroupId && nextGroups.some(group => group.id === preferredGroupId);
+    const nextSelectedGroupId = preferredGroupExists
+      ? preferredGroupId
+      : currentGroupStillExists
+        ? selectedGroupId
+        : nextGroups[0]?.id || '';
     const nextModules = ((modulesData ?? []) as AccessModule[]).map(module => ({
       ...module,
       sys_sub_module: nextSubModules
@@ -192,6 +214,132 @@ export default function AccessControl() {
     setAccessError('');
   }
 
+  function handleNewGroupNameChange(name: string) {
+    setGroupForm(form => ({
+      ...form,
+      name,
+      code: groupCodeTouched ? form.code : normalizeGroupCode(name),
+    }));
+    setGroupError('');
+  }
+
+  function startEditGroup(group: UserGroup) {
+    setEditingGroupId(group.id);
+    setEditGroupForm({ name: group.name, code: group.code, description: group.description ?? '' });
+    setGroupError('');
+    setGroupMessage('');
+  }
+
+  function cancelEditGroup() {
+    setEditingGroupId(null);
+    setEditGroupForm({ name: '', code: '', description: '' });
+  }
+
+  async function handleCreateGroup(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canManageAccess) return;
+
+    const name = groupForm.name.trim();
+    const code = normalizeGroupCode(groupForm.code || groupForm.name);
+    if (!name || !code) {
+      setGroupError('User group name and code are required.');
+      return;
+    }
+
+    setSavingGroup(true);
+    setGroupError('');
+    setGroupMessage('');
+
+    const { data, error } = await supabase.rpc('create_user_group', {
+      p_code: code,
+      p_name: name,
+      p_description: groupForm.description.trim(),
+    });
+
+    setSavingGroup(false);
+
+    if (error) {
+      setGroupError(error.message);
+      return;
+    }
+
+    const createdGroup = data as UserGroup | null;
+    setGroupForm({ name: '', code: '', description: '' });
+    setGroupCodeTouched(false);
+    setShowGroupForm(false);
+    setGroupMessage('User group created.');
+    await fetchData(createdGroup?.id);
+  }
+
+  async function handleUpdateGroup(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canManageAccess || !editingGroupId) return;
+
+    const name = editGroupForm.name.trim();
+    const code = normalizeGroupCode(editGroupForm.code || editGroupForm.name);
+    if (!name || !code) {
+      setGroupError('User group name and code are required.');
+      return;
+    }
+
+    setSavingGroup(true);
+    setGroupError('');
+    setGroupMessage('');
+
+    const { data, error } = await supabase.rpc('update_user_group', {
+      p_group_id: editingGroupId,
+      p_code: code,
+      p_name: name,
+      p_description: editGroupForm.description.trim(),
+    });
+
+    setSavingGroup(false);
+
+    if (error) {
+      setGroupError(error.message);
+      return;
+    }
+
+    const updatedGroup = data as UserGroup | null;
+    const nextSelectedGroupId = updatedGroup?.id ?? editingGroupId;
+    cancelEditGroup();
+    setGroupMessage('User group updated.');
+    await fetchData(nextSelectedGroupId);
+    await refreshProfile();
+  }
+
+  async function handleDeactivateGroup(group: UserGroup) {
+    if (!canManageAccess) return;
+    setDeactivateTarget(group);
+  }
+
+  async function handleConfirmDeactivateGroup() {
+    if (!canManageAccess || !deactivateTarget) return;
+
+    setSavingGroup(true);
+    setGroupError('');
+    setGroupMessage('');
+
+    const { error } = await supabase.rpc('deactivate_user_group', {
+      p_group_id: deactivateTarget.id,
+    });
+
+    setSavingGroup(false);
+
+    if (error) {
+      setGroupError(error.message);
+      return;
+    }
+
+    if (selectedGroupId === deactivateTarget.id) {
+      setSelectedGroupId('');
+      setSelectedActivityCodes(new Set());
+    }
+    setDeactivateTarget(null);
+    setGroupMessage('User group deactivated.');
+    await fetchData();
+  }
+
   function toggleActivity(code: ActivityCode) {
     if (!canManageAccess) return;
     setSelectedActivityCodes(prev => {
@@ -213,6 +361,29 @@ export default function AccessControl() {
       });
       return next;
     });
+  }
+
+  function toggleModuleCollapsed(moduleId: string) {
+    setCollapsedModuleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(moduleId)) next.delete(moduleId);
+      else next.add(moduleId);
+      return next;
+    });
+  }
+
+  function collapseAllModules() {
+    setCollapsedModuleIds(new Set(filteredModules.map(module => module.id)));
+  }
+
+  function expandAllModules() {
+    setCollapsedModuleIds(new Set());
+  }
+
+  function getModuleActivityStats(module: ModuleTree) {
+    const moduleActivities = (module.sys_sub_module ?? []).flatMap(subModule => subModule.sys_activity ?? []);
+    const selected = moduleActivities.filter(activity => selectedActivityCodes.has(activity.code)).length;
+    return { selected, total: moduleActivities.length };
   }
 
   async function handleSaveAccess() {
@@ -240,16 +411,24 @@ export default function AccessControl() {
     if (!canManageUsers || targetUser.role === role) return;
 
     setSavingUserId(targetUser.id);
-    const { data } = await supabase
-      .from('app_users')
-      .update({ role })
-      .eq('id', targetUser.id)
-      .select()
-      .maybeSingle();
+    setRoleError('');
+    const { data, error } = await supabase.rpc('assign_user_group', {
+      p_user_id: targetUser.id,
+      p_role: role,
+    });
 
-    if (data) {
+    if (error) {
+      const missingAssignmentRpc = error.code === 'PGRST202'
+        || error.message.includes('assign_user_group');
+      setRoleError(
+        missingAssignmentRpc
+          ? 'User role assignment is temporarily unavailable. Apply the latest database migration, then refresh this page.'
+          : error.message,
+      );
+    } else if (data) {
       setUsers(prev => prev.map(item => item.id === targetUser.id ? data as AppUser : item));
       await fetchData();
+      await refreshProfile();
     }
     setSavingUserId(null);
   }
@@ -345,6 +524,13 @@ export default function AccessControl() {
   const selectedGroup = groups.find(group => group.id === selectedGroupId);
   const selectedCount = selectedActivityCodes.size;
   const roleOptions = groups.length > 0 ? groups : FALLBACK_GROUPS;
+  const usersByRole = useMemo(() => {
+    const counts: Record<string, number> = {};
+    users.forEach(appUser => {
+      counts[appUser.role] = (counts[appUser.role] ?? 0) + 1;
+    });
+    return counts;
+  }, [users]);
 
   return (
     <div className="space-y-6">
@@ -353,7 +539,7 @@ export default function AccessControl() {
           <h1 className="text-2xl font-bold text-slate-800">Access Control</h1>
           <p className="text-slate-500 text-sm mt-0.5">Manage user accounts, group permissions, and access audit activity.</p>
         </div>
-        <button onClick={fetchData} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors">
+        <button onClick={() => fetchData()} disabled={loading} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           Refresh
         </button>
@@ -370,6 +556,131 @@ export default function AccessControl() {
           </div>
 
           <div className="p-5 space-y-4">
+            {canManageAccess && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">User Groups</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Create, rename, and deactivate access groups.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGroupForm(value => !value);
+                      setGroupError('');
+                      setGroupMessage('');
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition-colors"
+                  >
+                    {showGroupForm ? <X size={14} /> : <PlusCircle size={14} />}
+                    {showGroupForm ? 'Close' : 'Add Group'}
+                  </button>
+                </div>
+
+                {groupError && <p className="text-xs text-red-600">{groupError}</p>}
+                {groupMessage && <p className="text-xs text-emerald-700">{groupMessage}</p>}
+
+                {showGroupForm && (
+                  <form onSubmit={handleCreateGroup} className="grid grid-cols-1 md:grid-cols-[1fr_180px_1fr_auto] gap-2 items-end">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Name</label>
+                      <input
+                        value={groupForm.name}
+                        onChange={event => handleNewGroupNameChange(event.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        placeholder="Encoder Staff"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Code</label>
+                      <input
+                        value={groupForm.code}
+                        onChange={event => {
+                          setGroupCodeTouched(true);
+                          setGroupForm(form => ({ ...form, code: normalizeGroupCode(event.target.value) }));
+                        }}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white font-mono focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        placeholder="encoder_staff"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Description</label>
+                      <input
+                        value={groupForm.description}
+                        onChange={event => setGroupForm(form => ({ ...form, description: event.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={savingGroup}
+                      className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 text-white text-xs font-semibold transition-colors"
+                    >
+                      {savingGroup ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                      Save
+                    </button>
+                  </form>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                  {groups.map(group => {
+                    const isSystemGroup = group.code === 'manager' || group.code === 'operator';
+                    const isEditing = editingGroupId === group.id;
+                    const assignedUsers = usersByRole[group.code] ?? 0;
+
+                    return (
+                      <div key={group.id} className={`rounded-lg border px-3 py-3 ${selectedGroupId === group.id ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-white/80'}`}>
+                        {isEditing ? (
+                          <form onSubmit={handleUpdateGroup} className="space-y-2">
+                            <input
+                              value={editGroupForm.name}
+                              onChange={event => setEditGroupForm(form => ({ ...form, name: event.target.value }))}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                            />
+                            <input
+                              value={editGroupForm.code}
+                              disabled={isSystemGroup}
+                              onChange={event => setEditGroupForm(form => ({ ...form, code: normalizeGroupCode(event.target.value) }))}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono text-slate-600 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                            />
+                            <input
+                              value={editGroupForm.description}
+                              onChange={event => setEditGroupForm(form => ({ ...form, description: event.target.value }))}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                              placeholder="Description"
+                            />
+                            <div className="flex justify-end gap-1.5">
+                              <button type="button" onClick={cancelEditGroup} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50">Cancel</button>
+                              <button type="submit" disabled={savingGroup} className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-70">Save</button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div className="flex items-start justify-between gap-2">
+                            <button type="button" onClick={() => handleGroupChange(group.id)} className="min-w-0 text-left">
+                              <p className="text-sm font-semibold text-slate-800 truncate">{group.name}</p>
+                              <p className="text-xs text-slate-400 font-mono truncate">{group.code}</p>
+                              <p className="text-xs text-slate-500 mt-1">{assignedUsers} user{assignedUsers === 1 ? '' : 's'}</p>
+                            </button>
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button type="button" onClick={() => startEditGroup(group)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit group">
+                                <Pencil size={14} />
+                              </button>
+                              {!isSystemGroup && (
+                                <button type="button" onClick={() => handleDeactivateGroup(group)} disabled={savingGroup || assignedUsers > 0} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400" title={assignedUsers > 0 ? 'Move users out before deactivating' : 'Deactivate group'}>
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_auto] gap-3 items-end">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">User Group</label>
@@ -427,53 +738,85 @@ export default function AccessControl() {
               <div className="py-12 text-center text-slate-500 text-sm">No permissions found.</div>
             ) : (
               <div className="space-y-4">
-                {filteredModules.map(module => (
-                  <div key={module.id} className="border border-slate-200 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                      <h3 className="font-semibold text-slate-800">{module.name}</h3>
-                    </div>
-                    <div className="divide-y divide-slate-100">
-                      {(module.sys_sub_module ?? []).map(subModule => {
-                        const activities = subModule.sys_activity ?? [];
-                        const allChecked = activities.length > 0 && activities.every(activity => selectedActivityCodes.has(activity.code));
-                        return (
-                          <div key={subModule.id} className="p-4">
-                            <div className="flex items-center justify-between gap-3 mb-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-700">{subModule.name}</p>
-                                {subModule.nav_section && <p className="text-xs text-slate-400">{subModule.nav_section}</p>}
-                              </div>
-                              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
-                                <input
-                                  type="checkbox"
-                                  checked={allChecked}
-                                  disabled={!canManageAccess || activities.length === 0}
-                                  onChange={event => setSubModuleActivities(activities, event.target.checked)}
-                                  className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                                />
-                                Select All
-                              </label>
-                            </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                              {activities.map(activity => (
-                                <label key={activity.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${selectedActivityCodes.has(activity.code) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-600'}`}>
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedActivityCodes.has(activity.code)}
-                                    disabled={!canManageAccess}
-                                    onChange={() => toggleActivity(activity.code)}
-                                    className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                                  />
-                                  <span className="truncate" title={activity.code}>{activity.name}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-xs text-slate-500">
+                    {filteredModules.length} module{filteredModules.length === 1 ? '' : 's'} shown
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={expandAllModules} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                      Expand All
+                    </button>
+                    <button type="button" onClick={collapseAllModules} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                      Collapse All
+                    </button>
                   </div>
-                ))}
+                </div>
+
+                {filteredModules.map(module => {
+                  const stats = getModuleActivityStats(module);
+                  const isCollapsed = !permissionSearch.trim() && collapsedModuleIds.has(module.id);
+
+                  return (
+                    <div key={module.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                      <button
+                        type="button"
+                        onClick={() => toggleModuleCollapsed(module.id)}
+                        className="w-full px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-left hover:bg-slate-100 transition-colors"
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          {isCollapsed ? <ChevronRight size={16} className="text-slate-400 shrink-0" /> : <ChevronDown size={16} className="text-slate-400 shrink-0" />}
+                          <span className="font-semibold text-slate-800 truncate">{module.name}</span>
+                        </span>
+                        <span className="text-xs font-semibold text-slate-500 shrink-0">
+                          {stats.selected}/{stats.total} selected
+                        </span>
+                      </button>
+                      {!isCollapsed && (
+                        <div className="divide-y divide-slate-100">
+                          {(module.sys_sub_module ?? []).map(subModule => {
+                            const activities = subModule.sys_activity ?? [];
+                            const allChecked = activities.length > 0 && activities.every(activity => selectedActivityCodes.has(activity.code));
+                            const selectedInSubModule = activities.filter(activity => selectedActivityCodes.has(activity.code)).length;
+                            return (
+                              <div key={subModule.id} className="p-4">
+                                <div className="flex items-center justify-between gap-3 mb-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-700">{subModule.name}</p>
+                                    {subModule.nav_section && <p className="text-xs text-slate-400">{subModule.nav_section} - {selectedInSubModule}/{activities.length} selected</p>}
+                                  </div>
+                                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                                    <input
+                                      type="checkbox"
+                                      checked={allChecked}
+                                      disabled={!canManageAccess || activities.length === 0}
+                                      onChange={event => setSubModuleActivities(activities, event.target.checked)}
+                                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    Select All
+                                  </label>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                                  {activities.map(activity => (
+                                    <label key={activity.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${selectedActivityCodes.has(activity.code) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-600'}`}>
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedActivityCodes.has(activity.code)}
+                                        disabled={!canManageAccess}
+                                        onChange={() => toggleActivity(activity.code)}
+                                        className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                      />
+                                      <span className="truncate" title={activity.code}>{activity.name}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -558,6 +901,11 @@ export default function AccessControl() {
                 <p className="text-xs text-slate-500">Assign each user to a database-backed user group.</p>
               </div>
             </div>
+            {roleError && (
+              <div className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">
+                {roleError}
+              </div>
+            )}
 
             {loading ? (
               <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
@@ -645,6 +993,21 @@ export default function AccessControl() {
           </section>
         )}
       </div>
+
+      <ActionModal
+        open={!!deactivateTarget}
+        title="Deactivate User Group"
+        description="Users assigned to this group must be moved to another group first."
+        variant="warning"
+        confirmLabel="Deactivate Group"
+        loading={savingGroup}
+        onClose={() => setDeactivateTarget(null)}
+        onConfirm={handleConfirmDeactivateGroup}
+      >
+        <p className="text-sm text-slate-600">
+          Deactivate <span className="font-semibold text-slate-900">{deactivateTarget?.name}</span>? This group will no longer be available for access assignment.
+        </p>
+      </ActionModal>
     </div>
   );
 }

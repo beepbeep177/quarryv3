@@ -9,6 +9,10 @@ export type NavSection =
   | 'expenses'
   | 'fuel-management'
   | 'hauler-offset-ledger'
+  | 'operations'
+  | 'operations-stone-crusher'
+  | 'operations-sand-washing'
+  | 'operations-quarry-site'
   | 'reports'
   | 'access-control';
 

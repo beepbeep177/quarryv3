@@ -29,3 +29,23 @@ export function getPaymentModeAmount(tx: TransactionWithRelations, mode: SplitPa
   if (tx.payment_mode === 'SPLIT') return getSplitModeAmount(tx, mode);
   return 0;
 }
+
+export function getReceivableAmount(tx: TransactionWithRelations) {
+  if (tx.payment_mode === 'P.O' || tx.payment_mode === 'OFFSET') {
+    return roundCurrency(tx.total_amount ?? 0);
+  }
+
+  if (tx.payment_mode !== 'SPLIT') return 0;
+  return roundCurrency(getSplitModeAmount(tx, 'P.O') + getSplitModeAmount(tx, 'OFFSET'));
+}
+
+export function getReceivableModeLabel(tx: TransactionWithRelations) {
+  if (tx.payment_mode !== 'SPLIT') return tx.payment_mode;
+
+  const modes = (['P.O', 'OFFSET'] as const).filter(mode => getSplitModeAmount(tx, mode) > 0);
+  return modes.length > 0 ? `SPLIT: ${modes.join(' + ')}` : 'SPLIT';
+}
+
+function roundCurrency(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}

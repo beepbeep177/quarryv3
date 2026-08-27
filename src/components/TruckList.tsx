@@ -5,6 +5,7 @@ import type { Customer, Truck as TruckType } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
+import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
 
@@ -37,6 +38,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
   const [editSaving, setEditSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<{ plate_number?: string }>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TruckWithCustomer | null>(null);
   const [page, setPage] = useState(1);
   const canManage = canAdd || canEdit || canDelete;
 
@@ -141,17 +143,22 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this truck? This cannot be undone.')) return;
+  function handleDelete(truck: TruckWithCustomer) {
+    setDeleteTarget(truck);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
     setSaveError('');
-    setDeletingId(id);
-    const { error } = await supabase.from('trucks').delete().eq('id', id);
+    setDeletingId(deleteTarget.id);
+    const { error } = await supabase.from('trucks').delete().eq('id', deleteTarget.id);
     if (error) {
       setSaveError(error.message);
       setDeletingId(null);
       return;
     }
-    setTrucks(prev => prev.filter(t => t.id !== id));
+    setTrucks(prev => prev.filter(t => t.id !== deleteTarget.id));
+    setDeleteTarget(null);
     setDeletingId(null);
   }
 
@@ -372,7 +379,7 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
                             </button>
                           )}
                           {canDelete && (
-                            <button onClick={() => handleDelete(t.id)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
+                            <button onClick={() => handleDelete(t)} disabled={deletingId === t.id} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Delete">
                               {deletingId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                             </button>
                           )}
@@ -387,6 +394,27 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
           <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
         </div>
       )}
+
+      <ActionModal
+        open={!!deleteTarget}
+        title="Delete Truck"
+        description="This will permanently remove the truck from the truck list."
+        variant="danger"
+        confirmLabel="Delete Truck"
+        loading={!!deleteTarget && deletingId === deleteTarget.id}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Delete truck <span className="font-semibold text-slate-900">{deleteTarget?.plate_number}</span>? This cannot be undone.
+          </p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Assigned Customer</p>
+            <p className="mt-1 font-medium text-slate-700">{deleteTarget?.customers?.name ?? 'Unassigned'}</p>
+          </div>
+        </div>
+      </ActionModal>
     </div>
   );
 }

@@ -36,7 +36,6 @@ interface EntryForm {
   entry_date: string;
   jafcor_binder_trips: string;
   jafcor_boulder_trips: string;
-  zaffara_boulder_trips: string;
   number_of_trucks: string;
   quarry_equipment_diesel_liters: string;
   total_diesel_consumption_liters: string;
@@ -141,7 +140,6 @@ function initialForm(): EntryForm {
     entry_date: todayInput(),
     jafcor_binder_trips: '',
     jafcor_boulder_trips: '',
-    zaffara_boulder_trips: '',
     number_of_trucks: '',
     quarry_equipment_diesel_liters: '',
     total_diesel_consumption_liters: '',
@@ -155,7 +153,6 @@ function entryToForm(entry: QuarrySiteDailyEntry): EntryForm {
     entry_date: entry.entry_date,
     jafcor_binder_trips: String(entry.jafcor_binder_trips || ''),
     jafcor_boulder_trips: String(entry.jafcor_boulder_trips || ''),
-    zaffara_boulder_trips: String(entry.zaffara_boulder_trips || ''),
     number_of_trucks: entry.number_of_trucks || '',
     quarry_equipment_diesel_liters: String(entry.quarry_equipment_diesel_liters || ''),
     total_diesel_consumption_liters: String(entry.total_diesel_consumption_liters || ''),
@@ -165,7 +162,7 @@ function entryToForm(entry: QuarrySiteDailyEntry): EntryForm {
 }
 
 function statusForEntry(entry: QuarrySiteDailyEntry) {
-  const hasTrips = entry.jafcor_binder_trips > 0 || entry.total_boulder_trips > 0;
+  const hasTrips = entry.jafcor_binder_trips > 0 || entry.jafcor_boulder_trips > 0;
   const hasDiesel = entry.total_diesel_consumption_liters > 0 || entry.quarry_equipment_diesel_liters > 0;
   if (!hasTrips && !hasDiesel && !entry.number_of_trucks && entry.number_of_equipment === 0) return 'No Work';
   if (!hasTrips && hasDiesel) return 'Diesel Only';
@@ -232,8 +229,6 @@ export default function QuarrySiteOperations({
   const preview = useMemo(() => {
     const binderTrips = parseWhole(form.jafcor_binder_trips);
     const jafcorBoulderTrips = parseWhole(form.jafcor_boulder_trips);
-    const zaffaraBoulderTrips = parseWhole(form.zaffara_boulder_trips);
-    const totalBoulderTrips = jafcorBoulderTrips + zaffaraBoulderTrips;
     const quarryDiesel = parseDecimal(form.quarry_equipment_diesel_liters);
     const totalDiesel = parseDecimal(form.total_diesel_consumption_liters);
     const equipment = parseWhole(form.number_of_equipment);
@@ -245,8 +240,6 @@ export default function QuarrySiteOperations({
     return {
       binderTrips,
       jafcorBoulderTrips,
-      zaffaraBoulderTrips,
-      totalBoulderTrips,
       truckTotal,
       quarryDiesel: round2(quarryDiesel),
       totalDiesel: round2(totalDiesel),
@@ -260,7 +253,7 @@ export default function QuarrySiteOperations({
 
   const monthStats = useMemo(() => {
     const binderTrips = entries.reduce((sum, entry) => sum + entry.jafcor_binder_trips, 0);
-    const boulderTrips = entries.reduce((sum, entry) => sum + entry.total_boulder_trips, 0);
+    const boulderTrips = entries.reduce((sum, entry) => sum + entry.jafcor_boulder_trips, 0);
     const truckTotal = entries.reduce((sum, entry) => sum + parseTruckTotal(entry.number_of_trucks), 0);
     const totalDiesel = entries.reduce((sum, entry) => sum + entry.total_diesel_consumption_liters, 0);
     const quarryDiesel = entries.reduce((sum, entry) => sum + entry.quarry_equipment_diesel_liters, 0);
@@ -302,7 +295,7 @@ export default function QuarrySiteOperations({
       entry_date: form.entry_date,
       jafcor_binder_trips: preview.binderTrips,
       jafcor_boulder_trips: preview.jafcorBoulderTrips,
-      zaffara_boulder_trips: preview.zaffaraBoulderTrips,
+      zaffara_boulder_trips: 0,
       number_of_trucks: form.number_of_trucks.trim(),
       quarry_equipment_diesel_liters: preview.quarryDiesel,
       total_diesel_consumption_liters: preview.totalDiesel,
@@ -371,8 +364,6 @@ export default function QuarrySiteOperations({
       'JAFCOR Binder Trips',
       'Binder Amount',
       'JAFCOR Boulder Trips',
-      'ZAFFARA Boulder Trips',
-      'Total Boulder Trips',
       'JAFCOR Boulder Amount',
       'Number of Trucks',
       'Truck Total Preview',
@@ -388,8 +379,6 @@ export default function QuarrySiteOperations({
       entry.jafcor_binder_trips,
       entry.binder_amount,
       entry.jafcor_boulder_trips,
-      entry.zaffara_boulder_trips,
-      entry.total_boulder_trips,
       entry.jafcor_boulder_amount,
       entry.number_of_trucks,
       parseTruckTotal(entry.number_of_trucks),
@@ -520,17 +509,6 @@ export default function QuarrySiteOperations({
                   placeholder="ex. 35"
                 />
               </Field>
-              <Field label="ZAFFARA Boulder">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.zaffara_boulder_trips}
-                  onChange={e => updateForm('zaffara_boulder_trips', e.target.value)}
-                  className="input"
-                  placeholder="ex. 24"
-                />
-              </Field>
               <Field label="Number of Trucks" helper={preview.truckTotal > 0 ? `${fmt(preview.truckTotal)} parsed` : undefined}>
                 <input
                   type="text"
@@ -614,7 +592,7 @@ export default function QuarrySiteOperations({
               <p className="mt-0.5 text-xs text-slate-500">Preview updates before saving.</p>
             </div>
             <div className="space-y-3 p-5">
-              <ComputedRow label="Total Boulder Trips" value={whole(preview.totalBoulderTrips)} />
+              <ComputedRow label="JAFCOR Boulder Trips" value={whole(preview.jafcorBoulderTrips)} />
               <ComputedRow label="Binder Amount" value={`PHP ${fmt(preview.binderAmount)}`} />
               <ComputedRow label="JAFCOR Boulder Amount" value={`PHP ${fmt(preview.jafcorBoulderAmount)}`} />
               <ComputedRow label="Total Computed Amount" value={`PHP ${fmt(preview.totalAmount)}`} />
@@ -705,8 +683,8 @@ export default function QuarrySiteOperations({
                           <p className="text-xs text-slate-400">PHP {fmt(entry.binder_amount)}</p>
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          <p className="font-semibold">{whole(entry.total_boulder_trips)}</p>
-                          <p className="text-xs text-slate-400">J {whole(entry.jafcor_boulder_trips)} / Z {whole(entry.zaffara_boulder_trips)}</p>
+                          <p className="font-semibold">{whole(entry.jafcor_boulder_trips)}</p>
+                          <p className="text-xs text-slate-400">JAFCOR boulder</p>
                         </td>
                         <td className="px-4 py-3 text-slate-700">
                           <p className="font-medium">{entry.number_of_trucks || '-'}</p>
@@ -785,7 +763,7 @@ export default function QuarrySiteOperations({
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Boulder Trips</p>
-              <p className="mt-1 font-bold tabular-nums text-slate-800">{deleteTarget ? whole(deleteTarget.total_boulder_trips) : '0'}</p>
+              <p className="mt-1 font-bold tabular-nums text-slate-800">{deleteTarget ? whole(deleteTarget.jafcor_boulder_trips) : '0'}</p>
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Diesel</p>

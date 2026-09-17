@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { DollarSign, PlusCircle, RefreshCw, X, Loader2, Tag, Pencil, Trash2 } from 'lucide-react';
+import { DollarSign, PlusCircle, RefreshCw, X, Loader2, Tag, Pencil, Trash2, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Pricing } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
@@ -34,6 +34,7 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
   const [deleteTarget, setDeleteTarget] = useState<Pricing | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
   const canManage = canAdd || canEdit || canDelete;
 
   useEffect(() => { fetchPricing(); }, []);
@@ -124,9 +125,23 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
     setDeletingId(null);
   }
 
-  const totalPages = Math.max(1, Math.ceil(pricingList.length / PAGE_SIZE));
+  const filteredPricing = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return pricingList;
+    return pricingList.filter(p =>
+      p.material_type.toLowerCase().includes(query)
+      || String(p.unit_price).includes(query)
+      || fmt(p.unit_price).includes(query)
+    );
+  }, [pricingList, search]);
+  const totalPages = Math.max(1, Math.ceil(filteredPricing.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
-  const pagedPricing = useMemo(() => paginate(pricingList, currentPage, PAGE_SIZE), [pricingList, currentPage]);
+  const pagedPricing = useMemo(() => paginate(filteredPricing, currentPage, PAGE_SIZE), [filteredPricing, currentPage]);
+
+  function updateSearch(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
 
   return (
     <div className="space-y-5">
@@ -183,16 +198,39 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
         </div>
       )}
 
+      <div className="relative max-w-sm">
+        <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        <input
+          type="text"
+          aria-label="Search pricing by material or price"
+          placeholder="Search material or price..."
+          value={search}
+          onChange={e => updateSearch(e.target.value)}
+          className="w-full pl-9 pr-10 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => updateSearch('')}
+            aria-label="Clear pricing search"
+            title="Clear search"
+            className="absolute right-1 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
       {loading ? (
         <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
           <RefreshCw size={16} className="animate-spin" /> Loading...
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {pricingList.length === 0 ? (
-            <div className="col-span-3 py-16 text-center bg-white rounded-xl border border-slate-200">
+          {filteredPricing.length === 0 ? (
+            <div className="col-span-full py-16 text-center bg-white rounded-xl border border-slate-200">
               <DollarSign size={32} className="text-slate-300 mx-auto mb-3" />
-              <p className="text-slate-500 text-sm">No pricing entries</p>
+              <p className="text-slate-500 text-sm">{search.trim() ? 'No matching pricing entries' : 'No pricing entries'}</p>
             </div>
           ) : pagedPricing.map(p => (
             <div key={p.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow group">
@@ -257,7 +295,7 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
             </div>
           ))}
           <div className="md:col-span-2 xl:col-span-3">
-            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={pricingList.length} onPageChange={setPage} />
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filteredPricing.length} onPageChange={setPage} />
           </div>
         </div>
       )}

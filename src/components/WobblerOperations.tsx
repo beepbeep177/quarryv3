@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  CalendarDays,
+  Clock3,
+  Cog,
   Download,
   Edit3,
+  Fuel,
   Gauge,
   Loader2,
   RefreshCw,
@@ -11,24 +13,19 @@ import {
   Search,
   Trash2,
   Truck,
-  Waves,
-  Zap,
+  Users,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { SandWashingDailyEntry } from '../lib/database.types';
+import type { WobblerDailyEntry } from '../lib/database.types';
+import { calculateWobblerMetrics, getWobblerStatus, type WobblerStatus } from '../lib/wobblerOperations';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 8;
-const VIBRO_CBM_PER_DUMP = 8.4;
-const WASTE_CBM_PER_TRUCK = 14;
 
-type ProductOption = 'Vibro' | '3/8-S1' | 'No Operation';
-type WasteProductOption = 'Waste' | '3/8' | 'Rounded Mixed' | 'N/A';
-
-interface SandWashingOperationsProps {
+interface WobblerOperationsProps {
   canAdd?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -37,19 +34,14 @@ interface SandWashingOperationsProps {
 
 interface EntryForm {
   entry_date: string;
-  product: ProductOption;
   operation_hours: string;
-  time_of_operation: string;
+  downtime_hours: string;
+  time_schedule: string;
+  breakdown: string;
   number_of_dumps: string;
+  number_of_loaders: string;
   genset_diesel_consumption_liters: string;
-  number_truck_waste: string;
-  waste_product: WasteProductOption;
   notes: string;
-}
-
-function todayInput() {
-  const now = new Date();
-  return toInputDate(now);
 }
 
 function toInputDate(date: Date) {
@@ -58,6 +50,10 @@ function toInputDate(date: Date) {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+function todayInput() {
+  return toInputDate(new Date());
 }
 
 function monthStart(value: string) {
@@ -85,10 +81,6 @@ function formatDate(value: string) {
   });
 }
 
-function minutesToHours(minutes: number) {
-  return minutes / 60;
-}
-
 function fmt(value: number, digits = 2) {
   return Number(value || 0).toLocaleString('en-PH', {
     minimumFractionDigits: digits,
@@ -97,9 +89,7 @@ function fmt(value: number, digits = 2) {
 }
 
 function whole(value: number) {
-  return Number(value || 0).toLocaleString('en-PH', {
-    maximumFractionDigits: 0,
-  });
+  return Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 0 });
 }
 
 function parseWhole(value: string) {
@@ -136,58 +126,55 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 function initialForm(): EntryForm {
   return {
     entry_date: todayInput(),
-    product: 'Vibro',
     operation_hours: '',
-    time_of_operation: '',
+    downtime_hours: '',
+    time_schedule: '',
+    breakdown: '',
     number_of_dumps: '',
+    number_of_loaders: '',
     genset_diesel_consumption_liters: '',
-    number_truck_waste: '',
-    waste_product: 'Waste',
     notes: '',
   };
 }
 
-function normalizeProduct(value: string): ProductOption {
-  return value === '3/8-S1' || value === 'No Operation' ? value : 'Vibro';
-}
-
-function normalizeWasteProduct(value: string): WasteProductOption {
-  return value === '3/8' || value === 'Rounded Mixed' || value === 'N/A' ? value : 'Waste';
-}
-
-function entryToForm(entry: SandWashingDailyEntry): EntryForm {
+function entryToForm(entry: WobblerDailyEntry): EntryForm {
   return {
     entry_date: entry.entry_date,
-    product: normalizeProduct(entry.product),
     operation_hours: String(entry.operation_hours || ''),
-    time_of_operation: entry.time_of_operation || '',
+    downtime_hours: String(entry.downtime_hours || ''),
+    time_schedule: entry.time_schedule || '',
+    breakdown: entry.breakdown || '',
     number_of_dumps: String(entry.number_of_dumps || ''),
+    number_of_loaders: String(entry.number_of_loaders || ''),
     genset_diesel_consumption_liters: String(entry.genset_diesel_consumption_liters || ''),
-    number_truck_waste: String(entry.number_truck_waste || ''),
-    waste_product: normalizeWasteProduct(entry.waste_product),
     notes: entry.notes || '',
   };
 }
 
-function statusForEntry(entry: SandWashingDailyEntry) {
-  if (entry.product === 'No Operation' || (entry.operation_minutes === 0 && entry.number_of_dumps === 0)) return 'No Operation';
-  if ((entry.operation_minutes > 0 && entry.number_of_dumps === 0) || (entry.operation_minutes === 0 && entry.number_of_dumps > 0)) return 'Needs Review';
-  return 'Completed';
+function statusForEntry(entry: WobblerDailyEntry) {
+  return getWobblerStatus({
+    operationMinutes: entry.operation_minutes,
+    downtimeMinutes: entry.downtime_minutes,
+    dumps: entry.number_of_dumps,
+    loaders: entry.number_of_loaders,
+    breakdown: entry.breakdown,
+  });
 }
 
-function statusBadgeClass(status: string) {
-  if (status === 'Completed') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (status === 'Needs Review') return 'bg-amber-50 text-amber-700 border-amber-200';
-  return 'bg-slate-50 text-slate-600 border-slate-200';
+function statusBadgeClass(status: WobblerStatus) {
+  if (status === 'Completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'With Downtime') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (status === 'Needs Review') return 'border-red-200 bg-red-50 text-red-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
 }
 
-export default function SandWashingOperations({
+export default function WobblerOperations({
   canAdd = false,
   canEdit = false,
   canDelete = false,
   canExport = false,
-}: SandWashingOperationsProps) {
-  const [entries, setEntries] = useState<SandWashingDailyEntry[]>([]);
+}: WobblerOperationsProps) {
+  const [entries, setEntries] = useState<WobblerDailyEntry[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(monthStart(todayInput()));
   const [form, setForm] = useState<EntryForm>(() => initialForm());
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -195,7 +182,7 @@ export default function SandWashingOperations({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<SandWashingDailyEntry | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WobblerDailyEntry | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
   const canManageEntries = canAdd || canEdit || canDelete;
@@ -205,7 +192,7 @@ export default function SandWashingOperations({
     setError('');
 
     const { data, error: entriesError } = await supabase
-      .from('sand_washing_daily_entries')
+      .from('wobbler_daily_entries')
       .select('*')
       .gte('entry_date', selectedMonth)
       .lte('entry_date', monthEnd(selectedMonth))
@@ -214,7 +201,7 @@ export default function SandWashingOperations({
     if (entriesError) {
       setError(entriesError.message);
     } else {
-      setEntries((data ?? []) as SandWashingDailyEntry[]);
+      setEntries((data ?? []) as WobblerDailyEntry[]);
     }
 
     setLoading(false);
@@ -229,67 +216,55 @@ export default function SandWashingOperations({
   }, [search, selectedMonth]);
 
   function updateForm<K extends keyof EntryForm>(key: K, value: EntryForm[K]) {
-    setForm(prev => ({ ...prev, [key]: value }));
+    setForm(previous => ({ ...previous, [key]: value }));
   }
 
-  const preview = useMemo(() => {
-    const operationHours = parseDecimal(form.operation_hours);
-    const operationMinutes = Math.round(operationHours * 60);
-    const dumps = parseWhole(form.number_of_dumps);
-    const dieselLiters = parseDecimal(form.genset_diesel_consumption_liters);
-    const wasteTrucks = parseWhole(form.number_truck_waste);
-    const vibroSandVolume = round2(dumps * VIBRO_CBM_PER_DUMP);
-    const wasteVolume = round2(wasteTrucks * WASTE_CBM_PER_TRUCK);
-
-    return {
-      operationHours: round2(operationHours),
-      operationMinutes,
-      dumps,
-      dieselLiters: round2(dieselLiters),
-      wasteTrucks,
-      vibroSandVolume,
-      wasteVolume,
-      dieselConsumptionLph: operationHours > 0 ? round2(dieselLiters / operationHours) : 0,
-      status: form.product === 'No Operation' || (operationMinutes === 0 && dumps === 0)
-        ? 'No Operation'
-        : (operationMinutes > 0 && dumps === 0) || (operationMinutes === 0 && dumps > 0)
-          ? 'Needs Review'
-          : 'Completed',
-    };
-  }, [form]);
+  const preview = useMemo(() => calculateWobblerMetrics({
+    operationHours: parseDecimal(form.operation_hours),
+    downtimeHours: parseDecimal(form.downtime_hours),
+    dumps: parseWhole(form.number_of_dumps),
+    loaders: parseWhole(form.number_of_loaders),
+    dieselLiters: parseDecimal(form.genset_diesel_consumption_liters),
+    breakdown: form.breakdown,
+  }), [form]);
 
   const monthStats = useMemo(() => {
-    const totalOperationMinutes = entries.reduce((sum, entry) => sum + entry.operation_minutes, 0);
-    const totalDumps = entries.reduce((sum, entry) => sum + entry.number_of_dumps, 0);
-    const totalVibroVolume = entries.reduce((sum, entry) => sum + entry.vibro_sand_volume_cbm, 0);
-    const totalWasteVolume = entries.reduce((sum, entry) => sum + entry.waste_volume_cbm, 0);
-    const totalDiesel = entries.reduce((sum, entry) => sum + entry.genset_diesel_consumption_liters, 0);
-    const usedHours = round2(minutesToHours(totalOperationMinutes));
+    const operationMinutes = entries.reduce((sum, entry) => sum + entry.operation_minutes, 0);
+    const downtimeMinutes = entries.reduce((sum, entry) => sum + entry.downtime_minutes, 0);
+    const dumps = entries.reduce((sum, entry) => sum + entry.number_of_dumps, 0);
+    const dieselLiters = entries.reduce((sum, entry) => sum + entry.genset_diesel_consumption_liters, 0);
+    const operatingDays = entries.filter(entry => entry.operation_minutes > 0).length;
+    const loaderTotal = entries.reduce((sum, entry) => sum + entry.number_of_loaders, 0);
+    const operationHours = round2(operationMinutes / 60);
 
     return {
-      usedHours,
-      totalDumps,
-      totalVibroVolume: round2(totalVibroVolume),
-      totalWasteVolume: round2(totalWasteVolume),
-      totalDiesel: round2(totalDiesel),
-      dieselRate: usedHours > 0 ? round2(totalDiesel / usedHours) : 0,
+      operationHours,
+      downtimeHours: round2(downtimeMinutes / 60),
+      dumps,
+      dieselLiters: round2(dieselLiters),
+      dumpsPerHour: operationHours > 0 ? round2(dumps / operationHours) : 0,
+      dieselLitersPerHour: operationHours > 0 ? round2(dieselLiters / operationHours) : 0,
+      averageLoaders: operatingDays > 0 ? round2(loaderTotal / operatingDays) : 0,
     };
   }, [entries]);
 
   const filteredEntries = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return entries;
+    const query = search.trim().toLowerCase();
+    if (!query) return entries;
     return entries.filter(entry => (
-      entry.entry_date.includes(q) ||
-      entry.product.toLowerCase().includes(q) ||
-      entry.time_of_operation.toLowerCase().includes(q) ||
-      entry.waste_product.toLowerCase().includes(q)
+      entry.entry_date.includes(query)
+      || entry.time_schedule.toLowerCase().includes(query)
+      || entry.breakdown.toLowerCase().includes(query)
+      || entry.notes.toLowerCase().includes(query)
     ));
   }, [entries, search]);
 
   const totalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
-  const pagedEntries = useMemo(() => paginate(filteredEntries, currentPage, PAGE_SIZE), [filteredEntries, currentPage]);
+  const pagedEntries = useMemo(
+    () => paginate(filteredEntries, currentPage, PAGE_SIZE),
+    [filteredEntries, currentPage],
+  );
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -301,23 +276,23 @@ export default function SandWashingOperations({
 
     const payload = {
       entry_date: form.entry_date,
-      product: form.product,
       operation_minutes: preview.operationMinutes,
-      time_of_operation: form.time_of_operation.trim(),
+      downtime_minutes: preview.downtimeMinutes,
+      time_schedule: form.time_schedule.trim(),
+      breakdown: form.breakdown.trim(),
       number_of_dumps: preview.dumps,
+      number_of_loaders: preview.loaders,
       genset_diesel_consumption_liters: preview.dieselLiters,
-      number_truck_waste: preview.wasteTrucks,
-      waste_product: form.waste_product,
       notes: form.notes.trim(),
     };
 
     const result = editingId
-      ? await supabase.from('sand_washing_daily_entries').update(payload).eq('id', editingId)
-      : await supabase.from('sand_washing_daily_entries').insert(payload);
+      ? await supabase.from('wobbler_daily_entries').update(payload).eq('id', editingId)
+      : await supabase.from('wobbler_daily_entries').insert(payload);
 
     if (result.error) {
       setError(result.error.code === '23505'
-        ? 'There is already a Sand Washing entry for this date. Open that row to edit it.'
+        ? 'There is already a Wobbler entry for this date. Open that row to edit it.'
         : result.error.message);
     } else {
       handleReset();
@@ -328,7 +303,7 @@ export default function SandWashingOperations({
     setSaving(false);
   }
 
-  function handleEdit(entry: SandWashingDailyEntry) {
+  function handleEdit(entry: WobblerDailyEntry) {
     setEditingId(entry.id);
     setForm(entryToForm(entry));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -339,9 +314,8 @@ export default function SandWashingOperations({
     setForm(initialForm());
   }
 
-  function handleDelete(entry: SandWashingDailyEntry) {
-    if (!canDelete) return;
-    setDeleteTarget(entry);
+  function handleDelete(entry: WobblerDailyEntry) {
+    if (canDelete) setDeleteTarget(entry);
   }
 
   async function handleConfirmDelete() {
@@ -350,7 +324,7 @@ export default function SandWashingOperations({
     setError('');
 
     const { error: deleteError } = await supabase
-      .from('sand_washing_daily_entries')
+      .from('wobbler_daily_entries')
       .delete()
       .eq('id', deleteTarget.id);
 
@@ -360,7 +334,7 @@ export default function SandWashingOperations({
       return;
     }
 
-    setEntries(prev => prev.filter(item => item.id !== deleteTarget.id));
+    setEntries(previous => previous.filter(entry => entry.id !== deleteTarget.id));
     setDeleteTarget(null);
     setDeleting(false);
   }
@@ -369,46 +343,48 @@ export default function SandWashingOperations({
     if (!canExport) return;
     const headers = [
       'Date',
-      'Product',
       'Operation Minutes',
       'Operation Hours',
-      'Time of Operation',
+      'Downtime Minutes',
+      'Downtime Hours',
+      'Total Tracked Hours',
+      'Time Schedule',
+      'Breakdown',
       'Number of Dumps',
-      'Genset Diesel Consumption (L)',
-      'Daily Diesel Consumption (L/HR)',
-      'Vibro Sand Volume (cbm)',
-      'Number Truck Waste',
-      'Waste Volume (cbm)',
-      'Waste Product',
+      'Number of Loaders',
+      'Genset 5 Diesel Consumption (L)',
+      'Dumps per Operation Hour',
+      'Diesel Consumption (L/HR)',
       'Status',
       'Notes',
     ];
     const rows = filteredEntries.map(entry => [
       entry.entry_date,
-      entry.product,
       entry.operation_minutes,
       entry.operation_hours,
-      entry.time_of_operation,
+      entry.downtime_minutes,
+      entry.downtime_hours,
+      entry.total_tracked_hours,
+      entry.time_schedule,
+      entry.breakdown,
       entry.number_of_dumps,
+      entry.number_of_loaders,
       entry.genset_diesel_consumption_liters,
+      entry.dumps_per_operation_hour,
       entry.diesel_consumption_lph,
-      entry.vibro_sand_volume_cbm,
-      entry.number_truck_waste,
-      entry.waste_volume_cbm,
-      entry.waste_product,
       statusForEntry(entry),
       entry.notes,
     ]);
     const csv = [headers, ...rows].map(row => row.map(csvEscape).join(',')).join('\n');
-    downloadTextFile(`sand-washing-${selectedMonth}.csv`, csv, 'text/csv;charset=utf-8');
+    downloadTextFile(`wobbler-${selectedMonth}.csv`, csv, 'text/csv;charset=utf-8');
   }
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="mt-1 text-2xl font-bold text-slate-800">Sand Washing Daily Input</h1>
-          <p className="mt-0.5 text-sm text-slate-500">Manual daily encoding with auto-computed Vibro Sand, waste, and diesel rate summaries.</p>
+          <h1 className="mt-1 text-2xl font-bold text-slate-800">Wobbler Daily Input</h1>
+          <p className="mt-0.5 text-sm text-slate-500">Daily operating, downtime, loader, dump, and Genset 5 records.</p>
         </div>
         <div className="flex items-center gap-2">
           {canExport && (
@@ -432,7 +408,7 @@ export default function SandWashingOperations({
       </div>
 
       {!canManageEntries && (
-        <ReadOnlyNotice message="Your account can view Sand Washing records only. Ask a manager if you need to add or edit daily inputs." />
+        <ReadOnlyNotice message="Your account can view Wobbler records only. Ask a manager if you need to add or edit daily inputs." />
       )}
 
       {error && (
@@ -442,164 +418,60 @@ export default function SandWashingOperations({
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <MetricCard
-          icon={<Gauge size={21} />}
-          label="Operation Hours"
-          value={`${fmt(monthStats.usedHours)} hrs`}
-          detail={`${monthLabel(selectedMonth)} total`}
-          tone="emerald"
-        />
-        <MetricCard
-          icon={<Truck size={21} />}
-          label="Number of Dumps"
-          value={whole(monthStats.totalDumps)}
-          detail={`${fmt(VIBRO_CBM_PER_DUMP)} cbm per dump`}
-          tone="sky"
-        />
-        <MetricCard
-          icon={<Waves size={21} />}
-          label="Vibro Sand Volume"
-          value={`${fmt(monthStats.totalVibroVolume)} cbm`}
-          detail="Auto-computed output"
-          tone="amber"
-        />
-        <MetricCard
-          icon={<Truck size={21} />}
-          label="Waste Volume"
-          value={`${fmt(monthStats.totalWasteVolume)} cbm`}
-          detail={`${fmt(WASTE_CBM_PER_TRUCK)} cbm per truck`}
-          tone="violet"
-        />
-        <MetricCard
-          icon={<Zap size={21} />}
-          label="Diesel Rate"
-          value={`${fmt(monthStats.dieselRate)} L/hr`}
-          detail={`${fmt(monthStats.totalDiesel)} L recorded`}
-          tone="slate"
-        />
+        <MetricCard icon={<Gauge size={21} />} label="Operation Hours" value={`${fmt(monthStats.operationHours)} hrs`} detail={`${monthLabel(selectedMonth)} total`} tone="emerald" />
+        <MetricCard icon={<Clock3 size={21} />} label="Downtime Hours" value={`${fmt(monthStats.downtimeHours)} hrs`} detail="Recorded downtime" tone="amber" />
+        <MetricCard icon={<Truck size={21} />} label="Number of Dumps" value={whole(monthStats.dumps)} detail={`${fmt(monthStats.dumpsPerHour)} dumps/hr`} tone="sky" />
+        <MetricCard icon={<Users size={21} />} label="Average Loaders" value={fmt(monthStats.averageLoaders)} detail="Per operating day" tone="violet" />
+        <MetricCard icon={<Fuel size={21} />} label="Diesel Rate" value={`${fmt(monthStats.dieselLitersPerHour)} L/hr`} detail={`${fmt(monthStats.dieselLiters)} L recorded`} tone="slate" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <form onSubmit={handleSubmit} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="border-b border-slate-100 px-5 py-4">
-            <h2 className="text-lg font-bold text-slate-800">{editingId ? 'Edit SW Daily Input' : 'New SW Daily Input'}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">Encode the manual fields from the Sand Washing data sheet.</p>
+            <h2 className="text-lg font-bold text-slate-800">{editingId ? 'Edit Wobbler Daily Input' : 'New Wobbler Daily Input'}</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Encode the manual fields from the Wobbler data sheet.</p>
           </div>
 
           <div className="space-y-5 p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Date">
-                <input
-                  type="date"
-                  value={form.entry_date}
-                  onChange={e => updateForm('entry_date', e.target.value)}
-                  className="input"
-                  required
-                />
+                <input type="date" value={form.entry_date} onChange={event => updateForm('entry_date', event.target.value)} className="input" required />
               </Field>
-              <Field label="Product">
-                <select
-                  value={form.product}
-                  onChange={e => updateForm('product', e.target.value as ProductOption)}
-                  className="input"
-                >
-                  <option value="Vibro">Vibro</option>
-                  <option value="3/8-S1">3/8-S1</option>
-                  <option value="No Operation">No Operation</option>
-                </select>
+              <Field label="Time Schedule">
+                <input type="text" value={form.time_schedule} onChange={event => updateForm('time_schedule', event.target.value)} className="input" placeholder="ex. 11am-4pm" />
               </Field>
               <Field label="Operation Hours" helper={`${preview.operationMinutes} mins`}>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.operation_hours}
-                  onChange={e => updateForm('operation_hours', e.target.value)}
-                  className="input"
-                  placeholder="ex. 8.45"
-                />
+                <input type="number" min="0" step="0.01" value={form.operation_hours} onChange={event => updateForm('operation_hours', event.target.value)} className="input" placeholder="ex. 4" />
               </Field>
-              <Field label="Time of Operation">
-                <input
-                  type="text"
-                  value={form.time_of_operation}
-                  onChange={e => updateForm('time_of_operation', e.target.value)}
-                  className="input"
-                  placeholder="ex. 8am-7pm"
-                />
+              <Field label="Downtime Hours" helper={`${preview.downtimeMinutes} mins`}>
+                <input type="number" min="0" step="0.01" value={form.downtime_hours} onChange={event => updateForm('downtime_hours', event.target.value)} className="input" placeholder="ex. 1" />
               </Field>
               <Field label="Number of Dumps">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.number_of_dumps}
-                  onChange={e => updateForm('number_of_dumps', e.target.value)}
-                  className="input"
-                  placeholder="ex. 66"
-                />
+                <input type="number" min="0" step="1" value={form.number_of_dumps} onChange={event => updateForm('number_of_dumps', event.target.value)} className="input" placeholder="ex. 32" />
               </Field>
-              <Field label="Genset Diesel Consumption (L)">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.genset_diesel_consumption_liters}
-                  onChange={e => updateForm('genset_diesel_consumption_liters', e.target.value)}
-                  className="input"
-                  placeholder="ex. 120"
-                />
+              <Field label="Number of Loaders">
+                <input type="number" min="0" step="1" value={form.number_of_loaders} onChange={event => updateForm('number_of_loaders', event.target.value)} className="input" placeholder="ex. 2" />
               </Field>
-              <Field label="Number Truck Waste">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.number_truck_waste}
-                  onChange={e => updateForm('number_truck_waste', e.target.value)}
-                  className="input"
-                  placeholder="ex. 16"
-                />
+              <Field label="Genset 5 Diesel Consumption (L)">
+                <input type="number" min="0" step="0.01" value={form.genset_diesel_consumption_liters} onChange={event => updateForm('genset_diesel_consumption_liters', event.target.value)} className="input" placeholder="ex. 100" />
               </Field>
-              <Field label="Waste Product">
-                <select
-                  value={form.waste_product}
-                  onChange={e => updateForm('waste_product', e.target.value as WasteProductOption)}
-                  className="input"
-                >
-                  <option value="Waste">Waste</option>
-                  <option value="3/8">3/8</option>
-                  <option value="Rounded Mixed">Rounded Mixed</option>
-                  <option value="N/A">N/A</option>
-                </select>
+              <Field label="Breakdown">
+                <input type="text" value={form.breakdown} onChange={event => updateForm('breakdown', event.target.value)} className="input" placeholder="ex. No Trouble" />
               </Field>
             </div>
 
             <Field label="Notes">
-              <textarea
-                value={form.notes}
-                onChange={e => updateForm('notes', e.target.value)}
-                className="input min-h-20 resize-y"
-                placeholder="Optional encoder notes..."
-              />
+              <textarea value={form.notes} onChange={event => updateForm('notes', event.target.value)} className="input min-h-20 resize-y" placeholder="Optional encoder notes..." />
             </Field>
 
             <div className="flex flex-wrap items-center gap-3 pt-1">
               {(editingId ? canEdit : canAdd) && (
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600 disabled:opacity-60"
-                >
+                <button type="submit" disabled={saving} className="flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600 disabled:opacity-60">
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editingId ? 'Update Daily Input' : 'Save Daily Input'}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={handleReset}
-                className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-              >
+              <button type="button" onClick={handleReset} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50">
                 <RotateCcw size={16} />
                 Reset
               </button>
@@ -615,15 +487,13 @@ export default function SandWashingOperations({
             </div>
             <div className="space-y-3 p-5">
               <ComputedRow label="Operation Hours" value={`${fmt(preview.operationHours)} hrs`} />
-              <ComputedRow label="Number of Dumps" value={whole(preview.dumps)} />
-              <ComputedRow label="Vibro Sand Volume" value={`${fmt(preview.vibroSandVolume)} cbm`} />
-              <ComputedRow label="Waste Volume" value={`${fmt(preview.wasteVolume)} cbm`} />
-              <ComputedRow label="Diesel Rate" value={`${fmt(preview.dieselConsumptionLph)} L/hr`} />
+              <ComputedRow label="Downtime Hours" value={`${fmt(preview.downtimeHours)} hrs`} />
+              <ComputedRow label="Tracked Hours" value={`${fmt(preview.trackedHours)} hrs`} />
+              <ComputedRow label="Dumps per Hour" value={fmt(preview.dumpsPerHour)} />
+              <ComputedRow label="Diesel Rate" value={`${fmt(preview.dieselLitersPerHour)} L/hr`} />
               <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <span className="text-sm text-slate-500">Status</span>
-                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(preview.status)}`}>
-                  {preview.status}
-                </span>
+                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(preview.status)}`}>{preview.status}</span>
               </div>
             </div>
           </div>
@@ -638,10 +508,10 @@ export default function SandWashingOperations({
                 <input
                   type="month"
                   value={selectedMonth.slice(0, 7)}
-                  onChange={e => {
-                    const nextMonth = `${e.target.value}-01`;
+                  onChange={event => {
+                    const nextMonth = `${event.target.value}-01`;
                     setSelectedMonth(nextMonth);
-                    setForm(prev => ({ ...prev, entry_date: nextMonth }));
+                    setForm(previous => ({ ...previous, entry_date: nextMonth }));
                   }}
                   className="input"
                 />
@@ -654,30 +524,24 @@ export default function SandWashingOperations({
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Recent SW Entries</h2>
+            <h2 className="text-lg font-bold text-slate-800">Recent Wobbler Entries</h2>
             <p className="mt-0.5 text-xs text-slate-500">{monthLabel(selectedMonth)} operations log</p>
           </div>
           <div className="relative min-w-64">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search date, product, schedule..."
-              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-            />
+            <input type="text" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search date, schedule, breakdown..." className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
           </div>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-400">
             <Loader2 size={16} className="animate-spin" />
-            Loading Sand Washing entries...
+            Loading Wobbler entries...
           </div>
         ) : filteredEntries.length === 0 ? (
           <div className="py-16 text-center">
-            <CalendarDays size={34} className="mx-auto mb-3 text-slate-300" />
-            <p className="text-sm font-semibold text-slate-600">No Sand Washing entries found</p>
+            <Cog size={34} className="mx-auto mb-3 text-slate-300" />
+            <p className="text-sm font-semibold text-slate-600">No Wobbler entries found</p>
             <p className="mt-1 text-xs text-slate-400">Daily input records for this month will appear here.</p>
           </div>
         ) : (
@@ -687,12 +551,12 @@ export default function SandWashingOperations({
                 <thead>
                   <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-3 text-left">Date</th>
-                    <th className="px-4 py-3 text-left">Product</th>
                     <th className="px-4 py-3 text-right">Op Hrs</th>
+                    <th className="px-4 py-3 text-right">Down Hrs</th>
                     <th className="px-4 py-3 text-right">Dumps</th>
+                    <th className="px-4 py-3 text-right">Loaders</th>
                     <th className="px-4 py-3 text-right">Diesel</th>
-                    <th className="px-4 py-3 text-right">Vibro Volume</th>
-                    <th className="px-4 py-3 text-right">Waste</th>
+                    <th className="px-4 py-3 text-right">Productivity</th>
                     <th className="px-4 py-3 text-center">Status</th>
                     {(canEdit || canDelete) && <th className="px-4 py-3"></th>}
                   </tr>
@@ -704,44 +568,31 @@ export default function SandWashingOperations({
                       <tr key={entry.id} className="transition-colors hover:bg-slate-50">
                         <td className="px-4 py-3">
                           <p className="font-semibold text-slate-700">{formatDate(entry.entry_date)}</p>
-                          <p className="max-w-44 truncate text-xs text-slate-400">{entry.time_of_operation || 'No schedule'}</p>
+                          <p className="max-w-44 truncate text-xs text-slate-400">{entry.time_schedule || 'No schedule'}</p>
+                          {entry.breakdown && <p className="max-w-44 truncate text-xs text-slate-400" title={entry.breakdown}>{entry.breakdown}</p>}
                         </td>
-                        <td className="px-4 py-3 font-medium text-slate-700">{entry.product}</td>
                         <td className="px-4 py-3 text-right font-semibold tabular-nums text-emerald-600">{fmt(entry.operation_hours)}</td>
+                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-amber-600">{fmt(entry.downtime_hours)}</td>
                         <td className="px-4 py-3 text-right tabular-nums text-slate-700">{whole(entry.number_of_dumps)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">{whole(entry.number_of_loaders)}</td>
                         <td className="px-4 py-3 text-right tabular-nums text-violet-600">
                           <p>{fmt(entry.genset_diesel_consumption_liters)} L</p>
                           <p className="text-xs text-slate-400">{fmt(entry.diesel_consumption_lph)} L/hr</p>
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">{fmt(entry.vibro_sand_volume_cbm)} cbm</td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          <p>{fmt(entry.waste_volume_cbm)} cbm</p>
-                          <p className="text-xs text-slate-400">{whole(entry.number_truck_waste)} truck/s - {entry.waste_product}</p>
-                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">{fmt(entry.dumps_per_operation_hour)} dumps/hr</td>
                         <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(status)}`}>
-                            {status}
-                          </span>
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(status)}`}>{status}</span>
                         </td>
                         {(canEdit || canDelete) && (
                           <td className="px-4 py-3">
                             <div className="flex justify-end gap-1.5">
                               {canEdit && (
-                                <button
-                                  onClick={() => handleEdit(entry)}
-                                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600"
-                                  title="Edit entry"
-                                >
+                                <button onClick={() => handleEdit(entry)} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600" title="Edit entry">
                                   <Edit3 size={15} />
                                 </button>
                               )}
                               {canDelete && (
-                                <button
-                                  onClick={() => handleDelete(entry)}
-                                  disabled={deleting}
-                                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                                  title="Delete entry"
-                                >
+                                <button onClick={() => handleDelete(entry)} disabled={deleting} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-60" title="Delete entry">
                                   <Trash2 size={15} />
                                 </button>
                               )}
@@ -754,19 +605,14 @@ export default function SandWashingOperations({
                 </tbody>
               </table>
             </div>
-            <Pagination
-              page={currentPage}
-              pageSize={PAGE_SIZE}
-              totalItems={filteredEntries.length}
-              onPageChange={setPage}
-            />
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filteredEntries.length} onPageChange={setPage} />
           </>
         )}
       </div>
 
       <ActionModal
         open={!!deleteTarget}
-        title="Delete Sand Washing Entry"
+        title="Delete Wobbler Entry"
         description="This entry will be permanently removed from the daily input records."
         variant="danger"
         confirmLabel="Delete Entry"
@@ -776,18 +622,16 @@ export default function SandWashingOperations({
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Delete the Sand Washing entry for{' '}
-            <span className="font-semibold text-slate-900">{deleteTarget ? formatDate(deleteTarget.entry_date) : ''}</span>?
+            Delete the Wobbler entry for <span className="font-semibold text-slate-900">{deleteTarget ? formatDate(deleteTarget.entry_date) : ''}</span>?
           </p>
-
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Dumps</p>
               <p className="mt-1 font-bold tabular-nums text-slate-800">{deleteTarget ? whole(deleteTarget.number_of_dumps) : '0'}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Vibro Volume</p>
-              <p className="mt-1 font-bold tabular-nums text-slate-800">{deleteTarget ? fmt(deleteTarget.vibro_sand_volume_cbm) : '0.00'} cbm</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Operation Hours</p>
+              <p className="mt-1 font-bold tabular-nums text-slate-800">{deleteTarget ? fmt(deleteTarget.operation_hours) : '0.00'} hrs</p>
             </div>
           </div>
         </div>
@@ -819,9 +663,7 @@ function MetricCard({
 
   return (
     <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white px-4 py-4">
-      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${toneClass}`}>
-        {icon}
-      </div>
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${toneClass}`}>{icon}</div>
       <div className="min-w-0">
         <p className="truncate text-xs font-medium text-slate-500">{label}</p>
         <p className="mt-1 text-xl font-bold tabular-nums text-slate-800">{value}</p>

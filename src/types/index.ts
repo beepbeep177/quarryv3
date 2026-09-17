@@ -10,9 +10,11 @@ export type NavSection =
   | 'fuel-management'
   | 'hauler-offset-ledger'
   | 'operations'
+  | 'operations-dashboard'
   | 'operations-stone-crusher'
   | 'operations-sand-washing'
   | 'operations-quarry-site'
+  | 'operations-wobbler'
   | 'reports'
   | 'access-control';
 

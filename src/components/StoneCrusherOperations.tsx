@@ -21,6 +21,7 @@ import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import { calculateStoneCrusherVolumes, deriveStoneCrusherRate } from '../lib/stoneCrusherOperations';
 
 const PAGE_SIZE = 8;
 const DEFAULT_TARGET_HOURS = 200;
@@ -40,10 +41,10 @@ interface EntryForm {
   breakdown: string;
   jaw_1_dumps: string;
   jaw_2_dumps: string;
-  g1_volume_cbm: string;
-  three_fourth_volume_cbm: string;
-  s_three_fourth_volume_cbm: string;
-  s1c_volume_cbm: string;
+  g1_output_rate_cbm_per_hour: string;
+  three_fourth_output_rate_cbm_per_hour: string;
+  s_three_fourth_output_rate_cbm_per_hour: string;
+  s1c_output_rate_cbm_per_hour: string;
   genset_1_active: boolean;
   genset_2_active: boolean;
   genset_4_active: boolean;
@@ -153,10 +154,10 @@ function initialForm(): EntryForm {
     breakdown: '',
     jaw_1_dumps: '',
     jaw_2_dumps: '',
-    g1_volume_cbm: '',
-    three_fourth_volume_cbm: '',
-    s_three_fourth_volume_cbm: '',
-    s1c_volume_cbm: '',
+    g1_output_rate_cbm_per_hour: '',
+    three_fourth_output_rate_cbm_per_hour: '',
+    s_three_fourth_output_rate_cbm_per_hour: '',
+    s1c_output_rate_cbm_per_hour: '',
     genset_1_active: false,
     genset_2_active: false,
     genset_4_active: false,
@@ -181,10 +182,26 @@ function entryToForm(entry: StoneCrusherDailyEntry): EntryForm {
     breakdown: entry.breakdown || '',
     jaw_1_dumps: String(entry.jaw_1_dumps || ''),
     jaw_2_dumps: String(entry.jaw_2_dumps || ''),
-    g1_volume_cbm: String(entry.g1_volume_cbm || ''),
-    three_fourth_volume_cbm: String(entry.three_fourth_volume_cbm || ''),
-    s_three_fourth_volume_cbm: String(entry.s_three_fourth_volume_cbm || ''),
-    s1c_volume_cbm: String(entry.s1c_volume_cbm || ''),
+    g1_output_rate_cbm_per_hour: String(deriveStoneCrusherRate(
+      entry.g1_output_rate_cbm_per_hour,
+      entry.g1_volume_cbm,
+      entry.operation_minutes,
+    )),
+    three_fourth_output_rate_cbm_per_hour: String(deriveStoneCrusherRate(
+      entry.three_fourth_output_rate_cbm_per_hour,
+      entry.three_fourth_volume_cbm,
+      entry.operation_minutes,
+    )),
+    s_three_fourth_output_rate_cbm_per_hour: String(deriveStoneCrusherRate(
+      entry.s_three_fourth_output_rate_cbm_per_hour,
+      entry.s_three_fourth_volume_cbm,
+      entry.operation_minutes,
+    )),
+    s1c_output_rate_cbm_per_hour: String(deriveStoneCrusherRate(
+      entry.s1c_output_rate_cbm_per_hour,
+      entry.s1c_volume_cbm,
+      entry.operation_minutes,
+    )),
     genset_1_active: entry.genset_1_liters > 0 || entry.genset_1_running_minutes > 0 || entry.genset_used.includes('Genset 1'),
     genset_2_active: entry.genset_2_liters > 0 || entry.genset_2_running_minutes > 0 || entry.genset_used.includes('Genset 2'),
     genset_4_active: entry.genset_4_liters > 0 || entry.genset_4_running_minutes > 0 || entry.genset_used.includes('Genset 4'),
@@ -308,25 +325,26 @@ export default function StoneCrusherOperations({
     const genset2Liters = form.genset_2_active ? parseDecimal(form.genset_2_liters) : 0;
     const genset4Liters = form.genset_4_active ? parseDecimal(form.genset_4_liters) : 0;
     const waterPumpLiters = form.water_pump_active ? parseDecimal(form.water_pump_genset_liters) : 0;
-    const g1Volume = parseDecimal(form.g1_volume_cbm);
-    const threeFourthVolume = parseDecimal(form.three_fourth_volume_cbm);
-    const sThreeFourthVolume = parseDecimal(form.s_three_fourth_volume_cbm);
-    const s1cVolume = parseDecimal(form.s1c_volume_cbm);
-    const totalVolume = round2(g1Volume + threeFourthVolume + sThreeFourthVolume + s1cVolume);
+    const productOutput = calculateStoneCrusherVolumes(operationMinutes, {
+      g1: parseDecimal(form.g1_output_rate_cbm_per_hour),
+      threeFourth: parseDecimal(form.three_fourth_output_rate_cbm_per_hour),
+      sThreeFourth: parseDecimal(form.s_three_fourth_output_rate_cbm_per_hour),
+      s1c: parseDecimal(form.s1c_output_rate_cbm_per_hour),
+    });
 
     return {
       operationMinutes,
       downtimeMinutes,
-      operationHours: round2(operationHours),
+      operationHours: productOutput.operationHours,
       downtimeHours: round2(downtimeHours),
       totalDumps: jaw1 + jaw2,
       gensetDiesel: round2(genset1Liters + genset2Liters + genset4Liters + waterPumpLiters),
-      g1Volume,
-      threeFourthVolume,
-      sThreeFourthVolume,
-      s1cVolume,
-      totalVolume,
-      plantCapacityCbmPerHour: operationHours > 0 ? round2(totalVolume / operationHours) : 0,
+      g1Volume: productOutput.volumes.g1,
+      threeFourthVolume: productOutput.volumes.threeFourth,
+      sThreeFourthVolume: productOutput.volumes.sThreeFourth,
+      s1cVolume: productOutput.volumes.s1c,
+      totalVolume: productOutput.totalVolume,
+      plantCapacityCbmPerHour: productOutput.plantCapacityCbmPerHour,
       gensetUsed: [
         form.genset_1_active ? 'Genset 1' : '',
         form.genset_2_active ? 'Genset 2' : '',
@@ -402,6 +420,17 @@ export default function StoneCrusherOperations({
     if (editingId && !canEdit) return;
     if (!editingId && !canAdd) return;
 
+    const outputRateFields = [
+      form.g1_output_rate_cbm_per_hour,
+      form.three_fourth_output_rate_cbm_per_hour,
+      form.s_three_fourth_output_rate_cbm_per_hour,
+      form.s1c_output_rate_cbm_per_hour,
+    ];
+    if (preview.operationMinutes > 0 && outputRateFields.some(value => value.trim() === '')) {
+      setError('Enter an output rate for every product. Use 0 when a product was not produced.');
+      return;
+    }
+
     setSaving(true);
     setError('');
 
@@ -414,10 +443,10 @@ export default function StoneCrusherOperations({
       monthly_target_id: target?.id ?? null,
       jaw_1_dumps: parseWhole(form.jaw_1_dumps),
       jaw_2_dumps: parseWhole(form.jaw_2_dumps),
-      g1_volume_cbm: parseDecimal(form.g1_volume_cbm),
-      three_fourth_volume_cbm: parseDecimal(form.three_fourth_volume_cbm),
-      s_three_fourth_volume_cbm: parseDecimal(form.s_three_fourth_volume_cbm),
-      s1c_volume_cbm: parseDecimal(form.s1c_volume_cbm),
+      g1_output_rate_cbm_per_hour: parseDecimal(form.g1_output_rate_cbm_per_hour),
+      three_fourth_output_rate_cbm_per_hour: parseDecimal(form.three_fourth_output_rate_cbm_per_hour),
+      s_three_fourth_output_rate_cbm_per_hour: parseDecimal(form.s_three_fourth_output_rate_cbm_per_hour),
+      s1c_output_rate_cbm_per_hour: parseDecimal(form.s1c_output_rate_cbm_per_hour),
       genset_used: preview.gensetUsed,
       genset_1_liters: form.genset_1_active ? parseDecimal(form.genset_1_liters) : 0,
       genset_2_liters: form.genset_2_active ? parseDecimal(form.genset_2_liters) : 0,
@@ -501,6 +530,10 @@ export default function StoneCrusherOperations({
       'Genset 4 Liters',
       'Water Pump Liters',
       'Total Diesel Liters',
+      'G1 Output Rate (cbm/hr)',
+      '3/4 Output Rate (cbm/hr)',
+      'S-3/4 Output Rate (cbm/hr)',
+      'S1.C Output Rate (cbm/hr)',
       'G1 Volume (cbm)',
       '3/4 Volume (cbm)',
       'S-3/4 Volume (cbm)',
@@ -526,6 +559,10 @@ export default function StoneCrusherOperations({
       entry.genset_4_liters,
       entry.water_pump_genset_liters,
       entry.genset_diesel_consumption,
+      entry.g1_output_rate_cbm_per_hour ?? '',
+      entry.three_fourth_output_rate_cbm_per_hour ?? '',
+      entry.s_three_fourth_output_rate_cbm_per_hour ?? '',
+      entry.s1c_output_rate_cbm_per_hour ?? '',
       entry.g1_volume_cbm,
       entry.three_fourth_volume_cbm,
       entry.s_three_fourth_volume_cbm,
@@ -572,7 +609,7 @@ export default function StoneCrusherOperations({
         <div>
           {/* <p className="text-sm font-semibold uppercase tracking-wide text-emerald-600">Phase 3 Operations</p> */}
           <h1 className="text-2xl font-bold text-slate-800 mt-1">Stone Crusher Daily Input</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Manual daily encoding with auto-computed stockpile and diesel summaries.</p>
+          <p className="text-slate-500 text-sm mt-0.5">Daily output rates with auto-computed product volumes and diesel summaries.</p>
         </div>
         <div className="flex items-center gap-2">
           {canExport && (
@@ -609,7 +646,7 @@ export default function StoneCrusherOperations({
         <MetricCard icon={<Gauge size={20} />} label="Operation Hours" value={`${fmt(monthStats.usedHours)} hrs`} detail={monthLabel(selectedMonth)} tone="sky" />
         <MetricCard icon={<Truck size={20} />} label="Total Dumps" value={whole(monthStats.totalDumps)} detail="Jaw 1 + Jaw 2" tone="amber" />
         <MetricCard icon={<Zap size={20} />} label="Diesel Recorded" value={`${fmt(monthStats.totalDiesel)} L`} detail="operations record only" tone="violet" />
-        <MetricCard icon={<Factory size={20} />} label="Avg Capacity" value={`${fmt(monthStats.averageCapacity)} cbm/hr`} detail={`${fmt(monthStats.totalVolume)} cbm measured`} tone="slate" />
+        <MetricCard icon={<Factory size={20} />} label="Avg Capacity" value={`${fmt(monthStats.averageCapacity)} cbm/hr`} detail={`${fmt(monthStats.totalVolume)} cbm produced`} tone="slate" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
@@ -712,52 +749,56 @@ export default function StoneCrusherOperations({
 
             <div className="space-y-3">
               <div>
-                <h3 className="text-sm font-bold text-slate-700">Measured Stockpile Volumes</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Encode the end-of-day measured volume for each product in cubic meters.</p>
+                <h3 className="text-sm font-bold text-slate-700">Product Output Rates</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Enter each product's daily rate. Computed volume is rate multiplied by operation hours.</p>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <Field label="G1 Volume (cbm)">
+                <Field label="G1 Rate (cbm/hr)" helper={`${fmt(preview.g1Volume)} cbm`}>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={form.g1_volume_cbm}
-                    onChange={e => updateForm('g1_volume_cbm', e.target.value)}
+                    value={form.g1_output_rate_cbm_per_hour}
+                    onChange={e => updateForm('g1_output_rate_cbm_per_hour', e.target.value)}
                     className="input"
-                    placeholder="ex. 90"
+                    placeholder="ex. 22.50"
+                    required={preview.operationMinutes > 0}
                   />
                 </Field>
-                <Field label="3/4 Volume (cbm)">
+                <Field label="3/4 Rate (cbm/hr)" helper={`${fmt(preview.threeFourthVolume)} cbm`}>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={form.three_fourth_volume_cbm}
-                    onChange={e => updateForm('three_fourth_volume_cbm', e.target.value)}
+                    value={form.three_fourth_output_rate_cbm_per_hour}
+                    onChange={e => updateForm('three_fourth_output_rate_cbm_per_hour', e.target.value)}
                     className="input"
-                    placeholder="ex. 50"
+                    placeholder="ex. 12.50"
+                    required={preview.operationMinutes > 0}
                   />
                 </Field>
-                <Field label="S-3/4 Volume (cbm)">
+                <Field label="S-3/4 Rate (cbm/hr)" helper={`${fmt(preview.sThreeFourthVolume)} cbm`}>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={form.s_three_fourth_volume_cbm}
-                    onChange={e => updateForm('s_three_fourth_volume_cbm', e.target.value)}
-                    className="input"
-                    placeholder="ex. 160"
-                  />
-                </Field>
-                <Field label="S1.C Volume (cbm)">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.s1c_volume_cbm}
-                    onChange={e => updateForm('s1c_volume_cbm', e.target.value)}
+                    value={form.s_three_fourth_output_rate_cbm_per_hour}
+                    onChange={e => updateForm('s_three_fourth_output_rate_cbm_per_hour', e.target.value)}
                     className="input"
                     placeholder="ex. 40"
+                    required={preview.operationMinutes > 0}
+                  />
+                </Field>
+                <Field label="S1.C Rate (cbm/hr)" helper={`${fmt(preview.s1cVolume)} cbm`}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.s1c_output_rate_cbm_per_hour}
+                    onChange={e => updateForm('s1c_output_rate_cbm_per_hour', e.target.value)}
+                    className="input"
+                    placeholder="ex. 10"
+                    required={preview.operationMinutes > 0}
                   />
                 </Field>
               </div>
@@ -863,6 +904,10 @@ export default function StoneCrusherOperations({
               <ComputedRow label="Downtime Hours" value={`${fmt(preview.downtimeHours)} hrs`} />
               <ComputedRow label="Total Dumps" value={whole(preview.totalDumps)} />
               <ComputedRow label="Genset Diesel Consumption" value={`${fmt(preview.gensetDiesel)} L`} />
+              <ComputedRow label="G1 Volume" value={`${fmt(preview.g1Volume)} cbm`} />
+              <ComputedRow label="3/4 Volume" value={`${fmt(preview.threeFourthVolume)} cbm`} />
+              <ComputedRow label="S-3/4 Volume" value={`${fmt(preview.sThreeFourthVolume)} cbm`} />
+              <ComputedRow label="S1.C Volume" value={`${fmt(preview.s1cVolume)} cbm`} />
               <ComputedRow label="Total Volume" value={`${fmt(preview.totalVolume)} cbm`} />
               <ComputedRow label="Plant Capacity" value={`${fmt(preview.plantCapacityCbmPerHour)} cbm/hr`} />
             </div>
@@ -966,7 +1011,7 @@ export default function StoneCrusherOperations({
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1380px] text-sm">
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
                     <th className="px-4 py-3 text-left">Date</th>
@@ -975,7 +1020,11 @@ export default function StoneCrusherOperations({
                     <th className="px-4 py-3 text-right">Dumps</th>
                     <th className="px-4 py-3 text-left">Genset Used</th>
                     <th className="px-4 py-3 text-right">Diesel (L)</th>
-                    <th className="px-4 py-3 text-right">Volume</th>
+                    <th className="px-4 py-3 text-right">G1 (cbm)</th>
+                    <th className="px-4 py-3 text-right">3/4 (cbm)</th>
+                    <th className="px-4 py-3 text-right">S-3/4 (cbm)</th>
+                    <th className="px-4 py-3 text-right">S1.C (cbm)</th>
+                    <th className="px-4 py-3 text-right">Total (cbm)</th>
                     <th className="px-4 py-3 text-right">Capacity</th>
                     <th className="px-4 py-3 text-center">Status</th>
                     {(canEdit || canDelete) && <th className="px-4 py-3"></th>}
@@ -997,7 +1046,11 @@ export default function StoneCrusherOperations({
                           <p className="truncate" title={entry.genset_used || undefined}>{entry.genset_used || '-'}</p>
                         </td>
                         <td className="px-4 py-3 text-right text-violet-600 tabular-nums">{fmt(entry.genset_diesel_consumption)}</td>
-                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.total_volume_cbm)} cbm</td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.g1_volume_cbm)}</td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.three_fourth_volume_cbm)}</td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.s_three_fourth_volume_cbm)}</td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.s1c_volume_cbm)}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-slate-700 tabular-nums">{fmt(entry.total_volume_cbm)}</td>
                         <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(entry.plant_capacity_cbm_per_hour)} cbm/hr</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-semibold ${statusBadgeClass(status)}`}>

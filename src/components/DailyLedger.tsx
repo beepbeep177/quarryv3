@@ -38,6 +38,14 @@ function formatVolume(v: number) {
   return v.toFixed(2);
 }
 
+function formatTime(value?: string | null) {
+  if (!value) return '—';
+  const [hourText = '0', minuteText = '0'] = value.split(':');
+  const date = new Date();
+  date.setHours(Number(hourText) || 0, Number(minuteText) || 0, 0, 0);
+  return date.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+}
+
 export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAdd, canEdit, canDelete }: DailyLedgerProps) {
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +68,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
       .from('transactions')
       .select('*, customers(*), trucks(*)')
       .eq('transaction_date', today)
+      .order('transaction_time', { ascending: false })
       .order('created_at', { ascending: false });
     setTransactions((data ?? []) as TransactionWithRelations[]);
     setLoading(false);
@@ -222,6 +231,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
                     <th className="px-4 py-3 text-left">#</th>
+                    <th className="px-4 py-3 text-left">Time</th>
                     <th className="px-4 py-3 text-left">DR #</th>
                     <th className="px-4 py-3 text-left">Customer</th>
                     <th className="px-4 py-3 text-left">Truck</th>
@@ -244,6 +254,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
                     return (
                       <tr key={tx.id} className="hover:bg-slate-50 transition-colors group">
                         <td className="px-4 py-3 text-slate-400 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
+                        <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{formatTime(tx.transaction_time)}</td>
                         <td className="px-4 py-3 font-mono font-semibold text-slate-700">{tx.dr_number}</td>
                         <td className="px-4 py-3 text-slate-700 max-w-36">
                           <p className="truncate">{tx.customers?.name ?? '—'}</p>
@@ -366,7 +377,11 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
           <p>
             Delete DR <span className="font-semibold text-slate-900">{deleteTarget?.dr_number}</span>?
           </p>
-          <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Time</p>
+              <p className="mt-1 font-bold text-slate-800">{deleteTarget ? formatTime(deleteTarget.transaction_time) : '-'}</p>
+            </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</p>
               <p className="mt-1 truncate font-medium text-slate-700">{deleteTarget?.customers?.name ?? '-'}</p>

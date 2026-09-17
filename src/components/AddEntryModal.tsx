@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Wallet } from 'lucide-react';
+import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Wallet, Clock3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, CustomerCreditEntry, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
@@ -132,6 +132,39 @@ function txToForm(tx: TransactionWithRelations): FormData {
       kulot: String(tx.kulot),
     }],
   };
+}
+
+function EntryTimestamp({ date, transaction }: { date: string; transaction?: TransactionWithRelations }) {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    if (transaction) return;
+    const interval = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(interval);
+  }, [transaction]);
+
+  const timeOptions: Intl.DateTimeFormatOptions = {
+    timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  };
+  const recordedTime = transaction?.transaction_time;
+  const time = transaction
+    ? recordedTime
+      ? new Date(`2000-01-01T${recordedTime}+08:00`).toLocaleTimeString('en-PH', timeOptions)
+      : 'Unavailable'
+    : now.toLocaleTimeString('en-PH', timeOptions);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 text-xs mt-0.5">
+      <span>{new Date(`${date}T00:00:00+08:00`).toLocaleDateString('en-PH', {
+        timeZone: 'Asia/Manila', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      })}</span>
+      <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <Clock3 size={13} className="shrink-0" aria-hidden="true" />
+        <span>{transaction ? 'Recorded time' : 'Current time'} (PHT):</span>
+        <span className="tabular-nums whitespace-nowrap text-slate-700">{time}</span>
+      </span>
+    </div>
+  );
 }
 
 export default function AddEntryModal({ onClose, onSuccess, transaction, canUploadAttachments = true }: AddEntryModalProps) {
@@ -664,11 +697,11 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-lg font-bold text-slate-800">{isEditing ? 'Edit Entry' : 'Add Daily Entry'}</h2>
-            <p className="text-slate-500 text-xs mt-0.5">{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+            <EntryTimestamp date={form.transaction_date} transaction={transaction} />
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+          <button onClick={onClose} aria-label="Close entry" className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
             <X size={18} />
           </button>
         </div>

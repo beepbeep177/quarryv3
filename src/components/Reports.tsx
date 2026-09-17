@@ -14,6 +14,7 @@ import {
   FileText,
   Package,
   Pencil,
+  Clock3,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelations } from '../lib/database.types';
@@ -24,7 +25,7 @@ import ExpensesLedger from './ExpensesLedger';
 import { fetchAllPages } from '../lib/fetchAll';
 import ActionModal from './ActionModal';
 
-export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products';
+export type ReportTab = 'sales' | 'customers' | 'expenses' | 'net' | 'products' | 'hourly';
 type PeriodMode = 'CUSTOM' | 'MONTHLY' | 'YEARLY';
 type Grouping = 'DAY' | 'WEEK' | 'MONTH';
 type ExtraFeeFilter = 'ALL' | 'dr_capitol' | 'delivery_fee' | 'passway' | 'kulot';
@@ -80,6 +81,20 @@ interface ProductSalesSummary {
   quantity: number;
   volume: number;
   revenue: number;
+}
+
+interface HourlyKpiSummary {
+  hour: number;
+  label: string;
+  count: number;
+  volume: number;
+  netSales: number;
+  cash: number;
+  po: number;
+  offset: number;
+  gcash: number;
+  bankTransfer: number;
+  customerCredit: number;
 }
 
 interface FinancialLineItem {
@@ -227,6 +242,30 @@ function compareDateStrings(a: string, b: string) {
 
 function formatDateLabel(value: string, options: Intl.DateTimeFormatOptions) {
   return parseDate(value).toLocaleDateString('en-PH', options);
+}
+
+function parseTransactionHour(value?: string | null) {
+  if (!value) return 0;
+  const [hourText = '0'] = value.split(':');
+  const hour = Number(hourText);
+  return Number.isFinite(hour) && hour >= 0 && hour <= 23 ? hour : 0;
+}
+
+function formatTransactionTime(value?: string | null) {
+  if (!value) return '—';
+  const hour = parseTransactionHour(value);
+  const minute = Number(value.split(':')[1] ?? 0);
+  const date = new Date();
+  date.setHours(hour, Number.isFinite(minute) ? minute : 0, 0, 0);
+  return date.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatHourBucket(hour: number) {
+  const start = new Date();
+  const end = new Date();
+  start.setHours(hour, 0, 0, 0);
+  end.setHours(hour + 1, 0, 0, 0);
+  return `${start.toLocaleTimeString('en-PH', { hour: 'numeric' })} - ${end.toLocaleTimeString('en-PH', { hour: 'numeric' })}`;
 }
 
 function formatRangeLabel(start: string, end: string) {
@@ -543,6 +582,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           .gte('transaction_date', range.start)
           .lte('transaction_date', range.end)
           .order('transaction_date', { ascending: false })
+          .order('transaction_time', { ascending: false })
           .order('created_at', { ascending: false })
           .range(from, to);
         return { data: page.data as TransactionWithRelations[] | null, error: page.error };
@@ -633,6 +673,47 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
   const gcashTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'GCASH'), 0), [transactions]);
   const bankTransferTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'BANK_TRANSFER'), 0), [transactions]);
   const customerCreditTotal = useMemo(() => transactions.reduce((sum, tx) => sum + getPaymentModeAmount(tx, 'CUSTOMER_CREDIT'), 0), [transactions]);
+  const hourlyKpiList = useMemo(() => {
+    const buckets: HourlyKpiSummary[] = Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      label: formatHourBucket(hour),
+      count: 0,
+      volume: 0,
+      netSales: 0,
+      cash: 0,
+      po: 0,
+      offset: 0,
+      gcash: 0,
+      bankTransfer: 0,
+      customerCredit: 0,
+    }));
+
+    transactions.forEach(tx => {
+      const bucket = buckets[parseTransactionHour(tx.transaction_time)];
+      bucket.count += 1;
+      bucket.volume += tx.volume_m3 ?? 0;
+      bucket.netSales += reportNetSalesAmount(tx);
+      bucket.cash += getPaymentModeAmount(tx, 'CASH');
+      bucket.po += getPaymentModeAmount(tx, 'P.O');
+      bucket.offset += getPaymentModeAmount(tx, 'OFFSET');
+      bucket.gcash += getPaymentModeAmount(tx, 'GCASH');
+      bucket.bankTransfer += getPaymentModeAmount(tx, 'BANK_TRANSFER');
+      bucket.customerCredit += getPaymentModeAmount(tx, 'CUSTOMER_CREDIT');
+    });
+
+    return buckets.filter(bucket => bucket.count > 0);
+  }, [transactions]);
+  const peakHour = useMemo(() => (
+    hourlyKpiList.reduce<HourlyKpiSummary | null>((peak, bucket) => {
+      if (!peak) return bucket;
+      if (bucket.count > peak.count) return bucket;
+      if (bucket.count === peak.count && bucket.netSales > peak.netSales) return bucket;
+      return peak;
+    }, null)
+  ), [hourlyKpiList]);
+  const averageTransactionsPerActiveHour = useMemo(() => (
+    hourlyKpiList.length > 0 ? transactions.length / hourlyKpiList.length : 0
+  ), [hourlyKpiList.length, transactions.length]);
 
   const expenseSummaryList = useMemo(() => {
     const bucketMap: Record<string, ExpenseSummaryRow> = {};
@@ -689,6 +770,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
 
     return [...filtered].sort((a, b) => {
       if (a.transaction_date === b.transaction_date) {
+        const timeCompare = (b.transaction_time ?? '').localeCompare(a.transaction_time ?? '');
+        if (timeCompare !== 0) return timeCompare;
         return b.created_at.localeCompare(a.created_at);
       }
       return b.transaction_date.localeCompare(a.transaction_date);
@@ -854,9 +937,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
         title: 'Customer Sales History',
         filename: `customer-sales-history-${slugify(customerLabel)}-${slugify(range.label)}`,
         filterLines: [...baseFilterLines, `Customer: ${customerLabel}`, `Payment mode: ${selectedPayment}`, `Product: ${selectedMaterial}`],
-        headers: ['Date', 'DR #', 'Customer', 'Truck', 'Material', 'Length (cm)', 'Width (cm)', 'Height (cm)', 'Volume (m3)', 'Unit Price', 'Amount', 'DR Capitol', 'Delivery Fee', 'Passway', 'Kulot', 'Total', 'Mode', 'Status', 'Notes'],
+        headers: ['Date', 'Time', 'DR #', 'Customer', 'Truck', 'Material', 'Length (cm)', 'Width (cm)', 'Height (cm)', 'Volume (m3)', 'Unit Price', 'Amount', 'DR Capitol', 'Delivery Fee', 'Passway', 'Kulot', 'Total', 'Mode', 'Status', 'Notes'],
         rows: customerTransactions.map(tx => [
           formatDateLabel(tx.transaction_date, { month: 'short', day: 'numeric', year: 'numeric' }),
+          formatTransactionTime(tx.transaction_time),
           tx.dr_number || '',
           tx.customers?.name ?? '',
           tx.trucks?.plate_number ?? '',
@@ -876,7 +960,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           tx.status ?? '',
           tx.notes ?? '',
         ]),
-        totals: ['Totals', '', '', '', '', '', '', '', formatVolume(customerTotalVolume), '', fmt(customerTransactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.delivery_fee ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.passway ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.kulot ?? 0), 0)), fmt(customerTotalSales), '', '', ''],
+        totals: ['Totals', '', '', '', '', '', '', '', '', formatVolume(customerTotalVolume), '', fmt(customerTransactions.reduce((sum, tx) => sum + (tx.amount ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.dr_capitol ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.delivery_fee ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.passway ?? 0), 0)), fmt(customerTransactions.reduce((sum, tx) => sum + (tx.kulot ?? 0), 0)), fmt(customerTotalSales), '', '', ''],
       };
     }
 
@@ -908,6 +992,29 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           fmt(product.revenue),
         ]),
         totals: ['Totals', productTotals.quantity, formatVolume(productTotals.volume), fmt(productTotals.revenue)],
+      };
+    }
+
+    if (activeTab === 'hourly') {
+      return {
+        title: 'Hourly Transaction KPI',
+        filename: `hourly-transaction-kpi-${slugify(range.label)}`,
+        filterLines: baseFilterLines,
+        headers: ['Hour', 'Transactions', 'Volume (m3)', 'Net Sales', 'Avg Sale / Transaction', 'Cash', 'P.O', 'Offset', 'GCash', 'Bank', 'Customer Credit'],
+        rows: hourlyKpiList.map(bucket => [
+          bucket.label,
+          bucket.count,
+          formatVolume(bucket.volume),
+          fmt(bucket.netSales),
+          fmt(bucket.count > 0 ? bucket.netSales / bucket.count : 0),
+          fmt(bucket.cash),
+          fmt(bucket.po),
+          fmt(bucket.offset),
+          fmt(bucket.gcash),
+          fmt(bucket.bankTransfer),
+          fmt(bucket.customerCredit),
+        ]),
+        totals: ['Totals', transactions.length, formatVolume(grandVolume), fmt(grandNetSales), fmt(transactions.length > 0 ? grandNetSales / transactions.length : 0), fmt(cashTotal), fmt(poTotal), fmt(offsetTotal), fmt(gcashTotal), fmt(bankTransferTotal), fmt(customerCreditTotal)],
       };
     }
 
@@ -950,6 +1057,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     grandDrFees,
     grandNetSales,
     grandVolume,
+    hourlyKpiList,
     materialTypeFilter,
     netIncome,
     netIncomeList,
@@ -1127,6 +1235,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
                   })} 
                 />
+                <DetailItem
+                  label="Captured Time"
+                  value={formatTransactionTime(selectedTransaction.transaction_time)}
+                />
                 <DetailItem 
                   label="DR Number" 
                   value={selectedTransaction.dr_number || '—'} 
@@ -1283,6 +1395,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
             { id: 'customers', label: 'Customer Sales History' },
             { id: 'expenses', label: 'Expense Summary' },
             { id: 'net', label: 'Expense vs Revenue' },
+            { id: 'hourly', label: 'Hourly KPI' },
             { id: 'products', label: 'Product Sales Report' },
           ].map(tab => (
             <button
@@ -1637,6 +1750,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
                     <th className="px-4 py-3 text-left">Date</th>
+                    <th className="px-4 py-3 text-left">Time</th>
                     <th className="px-4 py-3 text-left">DR #</th>
                     <th className="px-4 py-3 text-left">Customer</th>
                     <th className="px-4 py-3 text-left">Truck</th>
@@ -1676,6 +1790,10 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
                           day: 'numeric',
                           year: 'numeric'
                         })}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
+                        {formatTransactionTime(tx.transaction_time)}
                       </td>
 
                       <td className="px-4 py-3 font-mono font-semibold text-slate-700 whitespace-nowrap">
@@ -1986,6 +2104,95 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
           )}
         </>
       )}
+
+      {activeTab === 'hourly' && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Peak Hour', value: peakHour?.label ?? '—', icon: <Clock3 size={18} className="text-emerald-500" />, bg: 'bg-emerald-50' },
+              { label: 'Peak Transactions', value: String(peakHour?.count ?? 0), icon: <FileBarChart2 size={18} className="text-sky-500" />, bg: 'bg-sky-50' },
+              { label: 'Active Hours', value: String(hourlyKpiList.length), icon: <Calendar size={18} className="text-violet-500" />, bg: 'bg-violet-50' },
+              { label: 'Avg Tx / Active Hr', value: averageTransactionsPerActiveHour.toFixed(1), icon: <TrendingUp size={18} className="text-amber-500" />, bg: 'bg-amber-50' },
+            ].map(card => (
+              <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-4">
+                <div className={`w-9 h-9 rounded-lg ${card.bg} flex items-center justify-center mb-3`}>{card.icon}</div>
+                <p className="text-xs text-slate-500 font-medium">{card.label}</p>
+                <p className="text-lg font-bold text-slate-800 mt-0.5 tabular-nums truncate">{loading ? '—' : card.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h2 className="font-semibold text-slate-800">Transactions by Captured Time</h2>
+              <p className="text-xs text-slate-500 mt-1">Based on the system-captured transaction time, grouped per hour.</p>
+            </div>
+            {loading ? (
+              <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
+                <RefreshCw size={16} className="animate-spin" /> Loading hourly KPI...
+              </div>
+            ) : hourlyKpiList.length === 0 ? (
+              <div className="py-16 text-center">
+                <Clock3 size={32} className="text-slate-300 mx-auto mb-3" />
+                <p className="text-slate-500 text-sm">No transaction time data in selected range</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                      <th className="px-4 py-3 text-left">Hour</th>
+                      <th className="px-4 py-3 text-right">Transactions</th>
+                      <th className="px-4 py-3 text-right">Volume (m³)</th>
+                      <th className="px-4 py-3 text-right">Net Sales</th>
+                      <th className="px-4 py-3 text-right">Avg Sale / Tx</th>
+                      <th className="px-4 py-3 text-right">Cash</th>
+                      <th className="px-4 py-3 text-right">P.O</th>
+                      <th className="px-4 py-3 text-right">Offset</th>
+                      <th className="px-4 py-3 text-right">GCash</th>
+                      <th className="px-4 py-3 text-right">Bank</th>
+                      <th className="px-4 py-3 text-right">Credit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {hourlyKpiList.map(bucket => (
+                      <tr key={bucket.hour} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">{bucket.label}</td>
+                        <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{bucket.count}</td>
+                        <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{formatVolume(bucket.volume)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">₱{fmt(bucket.netSales)}</td>
+                        <td className="px-4 py-3 text-right text-slate-600 tabular-nums">₱{fmt(bucket.count > 0 ? bucket.netSales / bucket.count : 0)}</td>
+                        <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{bucket.cash > 0 ? `₱${fmt(bucket.cash)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-amber-600 tabular-nums">{bucket.po > 0 ? `₱${fmt(bucket.po)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-slate-500 tabular-nums">{bucket.offset > 0 ? `₱${fmt(bucket.offset)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-blue-600 tabular-nums">{bucket.gcash > 0 ? `₱${fmt(bucket.gcash)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-violet-600 tabular-nums">{bucket.bankTransfer > 0 ? `₱${fmt(bucket.bankTransfer)}` : '—'}</td>
+                        <td className="px-4 py-3 text-right text-teal-600 tabular-nums">{bucket.customerCredit > 0 ? `₱${fmt(bucket.customerCredit)}` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-900">
+                      <td className="px-4 py-3 text-slate-300 font-semibold text-xs uppercase">Totals</td>
+                      <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">{transactions.length}</td>
+                      <td className="px-4 py-3 text-right text-emerald-400 font-bold tabular-nums">{formatVolume(grandVolume)}</td>
+                      <td className="px-4 py-3 text-right text-white font-bold tabular-nums">₱{fmt(grandNetSales)}</td>
+                      <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">₱{fmt(transactions.length > 0 ? grandNetSales / transactions.length : 0)}</td>
+                      <td className="px-4 py-3 text-right text-slate-300 font-semibold tabular-nums">₱{fmt(cashTotal)}</td>
+                      <td className="px-4 py-3 text-right text-amber-400 font-semibold tabular-nums">₱{fmt(poTotal)}</td>
+                      <td className="px-4 py-3 text-right text-slate-400 font-semibold tabular-nums">₱{fmt(offsetTotal)}</td>
+                      <td className="px-4 py-3 text-right text-blue-400 font-semibold tabular-nums">₱{fmt(gcashTotal)}</td>
+                      <td className="px-4 py-3 text-right text-violet-400 font-semibold tabular-nums">₱{fmt(bankTransferTotal)}</td>
+                      <td className="px-4 py-3 text-right text-teal-400 font-semibold tabular-nums">₱{fmt(customerCreditTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       {activeTab === 'products' && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

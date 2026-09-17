@@ -46,6 +46,7 @@ export type ActivityCode =
   | 'CUSTOMER_CREDIT_ADD'
   | 'CUSTOMER_CREDIT_ADJUST'
   | 'CUSTOMER_CREDIT_EXPORT'
+  | 'OPERATIONS_DASHBOARD_VIEW'
   | 'SC_OPERATIONS_VIEW'
   | 'SC_OPERATIONS_ADD'
   | 'SC_OPERATIONS_EDIT'
@@ -61,6 +62,11 @@ export type ActivityCode =
   | 'QS_OPERATIONS_EDIT'
   | 'QS_OPERATIONS_DELETE'
   | 'QS_OPERATIONS_EXPORT'
+  | 'WB_OPERATIONS_VIEW'
+  | 'WB_OPERATIONS_ADD'
+  | 'WB_OPERATIONS_EDIT'
+  | 'WB_OPERATIONS_DELETE'
+  | 'WB_OPERATIONS_EXPORT'
   | 'REPORTS_VIEW'
   | 'REPORTS_PRINT'
   | 'REPORTS_EXPORT'
@@ -388,6 +394,7 @@ export type Database = {
         Row: {
           id: string;
           transaction_date: string;
+          transaction_time: string;
           customer_id: string;
           truck_id: string;
           dr_number: string;
@@ -412,6 +419,7 @@ export type Database = {
         };
         Insert: {
           transaction_date?: string;
+          transaction_time?: string;
           customer_id: string;
           truck_id: string;
           dr_number?: string;
@@ -432,6 +440,7 @@ export type Database = {
         };
         Update: {
           transaction_date?: string;
+          transaction_time?: string;
           customer_id?: string;
           truck_id?: string;
           dr_number?: string;
@@ -1131,6 +1140,10 @@ export type Database = {
           genset_1_running_minutes: number;
           genset_2_running_minutes: number;
           genset_4_running_minutes: number;
+          g1_output_rate_cbm_per_hour: number | null;
+          three_fourth_output_rate_cbm_per_hour: number | null;
+          s_three_fourth_output_rate_cbm_per_hour: number | null;
+          s1c_output_rate_cbm_per_hour: number | null;
           g1_volume_cbm: number;
           three_fourth_volume_cbm: number;
           s_three_fourth_volume_cbm: number;
@@ -1169,6 +1182,10 @@ export type Database = {
           genset_1_running_minutes?: number;
           genset_2_running_minutes?: number;
           genset_4_running_minutes?: number;
+          g1_output_rate_cbm_per_hour?: number | null;
+          three_fourth_output_rate_cbm_per_hour?: number | null;
+          s_three_fourth_output_rate_cbm_per_hour?: number | null;
+          s1c_output_rate_cbm_per_hour?: number | null;
           g1_volume_cbm?: number;
           three_fourth_volume_cbm?: number;
           s_three_fourth_volume_cbm?: number;
@@ -1195,6 +1212,10 @@ export type Database = {
           genset_1_running_minutes?: number;
           genset_2_running_minutes?: number;
           genset_4_running_minutes?: number;
+          g1_output_rate_cbm_per_hour?: number | null;
+          three_fourth_output_rate_cbm_per_hour?: number | null;
+          s_three_fourth_output_rate_cbm_per_hour?: number | null;
+          s1c_output_rate_cbm_per_hour?: number | null;
           g1_volume_cbm?: number;
           three_fourth_volume_cbm?: number;
           s_three_fourth_volume_cbm?: number;
@@ -1222,7 +1243,7 @@ export type Database = {
           number_of_dumps: number;
           genset_diesel_consumption_liters: number;
           number_truck_waste: number;
-          waste_product: 'Waste' | '3/8' | 'N/A';
+          waste_product: 'Waste' | '3/8' | 'Rounded Mixed' | 'N/A';
           operation_hours: number;
           vibro_sand_volume_cbm: number;
           waste_volume_cbm: number;
@@ -1241,7 +1262,7 @@ export type Database = {
           number_of_dumps?: number;
           genset_diesel_consumption_liters?: number;
           number_truck_waste?: number;
-          waste_product?: 'Waste' | '3/8' | 'N/A';
+          waste_product?: 'Waste' | '3/8' | 'Rounded Mixed' | 'N/A';
           notes?: string;
           created_by?: string | null;
           created_at?: string;
@@ -1255,7 +1276,7 @@ export type Database = {
           number_of_dumps?: number;
           genset_diesel_consumption_liters?: number;
           number_truck_waste?: number;
-          waste_product?: 'Waste' | '3/8' | 'N/A';
+          waste_product?: 'Waste' | '3/8' | 'Rounded Mixed' | 'N/A';
           notes?: string;
           created_by?: string | null;
           updated_at?: string;
@@ -1306,6 +1327,57 @@ export type Database = {
           quarry_equipment_diesel_liters?: number;
           total_diesel_consumption_liters?: number;
           number_of_equipment?: number;
+          notes?: string;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      wobbler_daily_entries: {
+        Row: {
+          id: string;
+          entry_date: string;
+          operation_minutes: number;
+          downtime_minutes: number;
+          time_schedule: string;
+          breakdown: string;
+          number_of_dumps: number;
+          number_of_loaders: number;
+          genset_diesel_consumption_liters: number;
+          operation_hours: number;
+          downtime_hours: number;
+          total_tracked_hours: number;
+          dumps_per_operation_hour: number;
+          diesel_consumption_lph: number;
+          notes: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          entry_date: string;
+          operation_minutes?: number;
+          downtime_minutes?: number;
+          time_schedule?: string;
+          breakdown?: string;
+          number_of_dumps?: number;
+          number_of_loaders?: number;
+          genset_diesel_consumption_liters?: number;
+          notes?: string;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          entry_date?: string;
+          operation_minutes?: number;
+          downtime_minutes?: number;
+          time_schedule?: string;
+          breakdown?: string;
+          number_of_dumps?: number;
+          number_of_loaders?: number;
+          genset_diesel_consumption_liters?: number;
           notes?: string;
           created_by?: string | null;
           updated_at?: string;
@@ -1631,6 +1703,7 @@ export type StoneCrusherMonthlyTarget = Database['public']['Tables']['stone_crus
 export type StoneCrusherDailyEntry = Database['public']['Tables']['stone_crusher_daily_entries']['Row'];
 export type SandWashingDailyEntry = Database['public']['Tables']['sand_washing_daily_entries']['Row'];
 export type QuarrySiteDailyEntry = Database['public']['Tables']['quarry_site_daily_entries']['Row'];
+export type WobblerDailyEntry = Database['public']['Tables']['wobbler_daily_entries']['Row'];
 
 export type AuditLog = Omit<AuditLogRow, 'old_data' | 'new_data'> & {
   old_data: Record<string, unknown> | null;

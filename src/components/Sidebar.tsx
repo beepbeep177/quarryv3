@@ -22,6 +22,7 @@ import {
   Mountain,
   Settings,
   Waves,
+  Cog,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ActivityCode } from '../lib/database.types';
@@ -167,7 +168,8 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
   }, [can]);
 
   const operationsItems = useMemo<MenuItem[]>(() => {
-    const children = [
+    const canViewOperationsDashboard = can('OPERATIONS_DASHBOARD_VIEW') || can('USER_GROUP_ACCESS_MANAGE');
+    const moduleChildren = [
       ...(can('SC_OPERATIONS_VIEW') || can('SC_OPERATIONS_ADD') || can('SC_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
         ? [{ id: 'operations-stone-crusher' as const, label: 'Stone Crusher', icon: <Factory size={15} /> }]
         : []),
@@ -177,9 +179,19 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       ...(can('QS_OPERATIONS_VIEW') || can('QS_OPERATIONS_ADD') || can('QS_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
         ? [{ id: 'operations-quarry-site' as const, label: 'Quarry Site', icon: <Mountain size={15} /> }]
         : []),
+      ...(can('WB_OPERATIONS_VIEW') || can('WB_OPERATIONS_ADD') || can('WB_OPERATIONS_EDIT') || can('USER_GROUP_ACCESS_MANAGE')
+        ? [{ id: 'operations-wobbler' as const, label: 'Wobbler', icon: <Cog size={15} /> }]
+        : []),
     ];
 
-    if (children.length === 0) return [];
+    if (!canViewOperationsDashboard && moduleChildren.length === 0) return [];
+
+    const children = [
+      ...(canViewOperationsDashboard
+        ? [{ id: 'operations-dashboard' as const, label: 'Dashboard', icon: <LayoutDashboard size={15} /> }]
+        : []),
+      ...moduleChildren,
+    ];
 
     return [
       {

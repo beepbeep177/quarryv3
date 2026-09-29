@@ -1,4 +1,4 @@
-export type WobblerStatus = 'Completed' | 'With Downtime' | 'Needs Review' | 'No Work';
+export type WobblerStatus = 'Completed' | 'With Downtime' | 'Needs Review' | 'No Operation';
 
 export interface WobblerStatusInput {
   operationMinutes: number;
@@ -27,7 +27,7 @@ function isBreakdownRecorded(value: string) {
 }
 
 export function getWobblerStatus(input: WobblerStatusInput): WobblerStatus {
-  if (input.operationMinutes === 0 && input.dumps === 0) return 'No Work';
+  if (input.operationMinutes === 0 && input.dumps === 0) return 'No Operation';
   if (
     (input.operationMinutes > 0 && input.dumps === 0)
     || (input.operationMinutes === 0 && input.dumps > 0)

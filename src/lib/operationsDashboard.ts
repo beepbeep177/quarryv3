@@ -7,7 +7,7 @@ import type {
 import { getWobblerStatus } from './wobblerOperations';
 
 export type OperationsModuleKey = 'stoneCrusher' | 'sandWashing' | 'quarrySite' | 'wobbler';
-export type OperationsStatus = 'Completed' | 'With Downtime' | 'Needs Review' | 'No Operation' | 'Missing Entry';
+export type OperationsStatus = 'Completed' | 'With Downtime' | 'Needs Review' | 'No Operation';
 
 export interface OperationsAccess {
   stoneCrusher: boolean;
@@ -59,14 +59,14 @@ function hasRecordedBreakdown(value: string) {
 }
 
 function stoneCrusherStatus(entry: StoneCrusherDailyEntry | null): OperationsStatus {
-  if (!entry) return 'Missing Entry';
+  if (!entry) return 'No Operation';
   if (entry.operation_minutes === 0 && entry.total_dumps === 0) return 'No Operation';
   if (entry.downtime_minutes > 0 || hasRecordedBreakdown(entry.breakdown)) return 'With Downtime';
   return 'Completed';
 }
 
 function sandWashingStatus(entry: SandWashingDailyEntry | null): OperationsStatus {
-  if (!entry) return 'Missing Entry';
+  if (!entry) return 'No Operation';
   if (entry.product === 'No Operation' || (entry.operation_minutes === 0 && entry.number_of_dumps === 0)) {
     return 'No Operation';
   }
@@ -78,7 +78,7 @@ function sandWashingStatus(entry: SandWashingDailyEntry | null): OperationsStatu
 }
 
 function quarrySiteStatus(entry: QuarrySiteDailyEntry | null): OperationsStatus {
-  if (!entry) return 'Missing Entry';
+  if (!entry) return 'No Operation';
   const hasTrips = entry.jafcor_binder_trips > 0 || entry.jafcor_boulder_trips > 0;
   const hasDiesel = entry.total_diesel_consumption_liters > 0 || entry.quarry_equipment_diesel_liters > 0;
   if (!hasTrips && !hasDiesel && !entry.number_of_trucks && entry.number_of_equipment === 0) return 'No Operation';
@@ -87,7 +87,7 @@ function quarrySiteStatus(entry: QuarrySiteDailyEntry | null): OperationsStatus 
 }
 
 function wobblerStatus(entry: WobblerDailyEntry | null): OperationsStatus {
-  if (!entry) return 'Missing Entry';
+  if (!entry) return 'No Operation';
   const status = getWobblerStatus({
     operationMinutes: entry.operation_minutes,
     downtimeMinutes: entry.downtime_minutes,
@@ -95,7 +95,7 @@ function wobblerStatus(entry: WobblerDailyEntry | null): OperationsStatus {
     loaders: entry.number_of_loaders,
     breakdown: entry.breakdown,
   });
-  return status === 'No Work' ? 'No Operation' : status;
+  return status;
 }
 
 export function buildOperationsDaySummary(
@@ -137,10 +137,10 @@ export function buildOperationsDaySummary(
     totalDowntimeMinutes:
       (stoneCrusher?.downtime_minutes ?? 0)
       + (wobbler?.downtime_minutes ?? 0),
-    stoneCrusher: { status: access.stoneCrusher ? stoneCrusherStatus(stoneCrusher) : 'Missing Entry', entry: stoneCrusher },
-    sandWashing: { status: access.sandWashing ? sandWashingStatus(sandWashing) : 'Missing Entry', entry: sandWashing },
-    quarrySite: { status: access.quarrySite ? quarrySiteStatus(quarrySite) : 'Missing Entry', entry: quarrySite },
-    wobbler: { status: access.wobbler ? wobblerStatus(wobbler) : 'Missing Entry', entry: wobbler },
+    stoneCrusher: { status: access.stoneCrusher ? stoneCrusherStatus(stoneCrusher) : 'No Operation', entry: stoneCrusher },
+    sandWashing: { status: access.sandWashing ? sandWashingStatus(sandWashing) : 'No Operation', entry: sandWashing },
+    quarrySite: { status: access.quarrySite ? quarrySiteStatus(quarrySite) : 'No Operation', entry: quarrySite },
+    wobbler: { status: access.wobbler ? wobblerStatus(wobbler) : 'No Operation', entry: wobbler },
   };
 }
 

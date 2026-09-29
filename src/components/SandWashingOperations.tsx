@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   CalendarDays,
   Download,
@@ -15,11 +15,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
 import type { SandWashingDailyEntry } from '../lib/database.types';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import NoOperationButton from './NoOperationButton';
+import TimeRangeInput from './TimeRangeInput';
 
 const PAGE_SIZE = 8;
 const VIBRO_CBM_PER_DUMP = 8.4;
@@ -291,41 +294,51 @@ export default function SandWashingOperations({
   const currentPage = Math.min(page, totalPages);
   const pagedEntries = useMemo(() => paginate(filteredEntries, currentPage, PAGE_SIZE), [filteredEntries, currentPage]);
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleSubmitInFlight = useRef(false);
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (editingId && !canEdit) return;
-    if (!editingId && !canAdd) return;
+    if (handleSubmitInFlight.current) return;
+    handleSubmitInFlight.current = true;
+    try {
+      if (editingId && !canEdit) return;
+      if (!editingId && !canAdd) return;
 
-    setSaving(true);
-    setError('');
+      setSaving(true);
+      setError('');
 
-    const payload = {
-      entry_date: form.entry_date,
-      product: form.product,
-      operation_minutes: preview.operationMinutes,
-      time_of_operation: form.time_of_operation.trim(),
-      number_of_dumps: preview.dumps,
-      genset_diesel_consumption_liters: preview.dieselLiters,
-      number_truck_waste: preview.wasteTrucks,
-      waste_product: form.waste_product,
-      notes: form.notes.trim(),
-    };
+      const payload = {
+        entry_date: form.entry_date,
+        product: form.product,
+        operation_minutes: preview.operationMinutes,
+        time_of_operation: form.time_of_operation.trim(),
+        number_of_dumps: preview.dumps,
+        genset_diesel_consumption_liters: preview.dieselLiters,
+        number_truck_waste: preview.wasteTrucks,
+        waste_product: form.waste_product,
+        notes: form.notes.trim(),
+      };
 
-    const result = editingId
-      ? await supabase.from('sand_washing_daily_entries').update(payload).eq('id', editingId)
-      : await supabase.from('sand_washing_daily_entries').insert(payload);
+      const result = editingId
+        ? await supabase.from('sand_washing_daily_entries').update(payload).eq('id', editingId).select('id')
+        : await supabase.from('sand_washing_daily_entries').insert(payload).select('id');
 
-    if (result.error) {
-      setError(result.error.code === '23505'
-        ? 'There is already a Sand Washing entry for this date. Open that row to edit it.'
-        : result.error.message);
-    } else {
-      handleReset();
-      setSelectedMonth(monthStart(payload.entry_date));
-      await fetchData();
+      if (result.error) {
+        setError(result.error.code === '23505'
+          ? 'There is already a Sand Washing entry for this date. Open that row to edit it.'
+          : friendlyDbError(result.error));
+      } else if (!result.data?.length) {
+        setError(NOT_SAVED_MESSAGE);
+      } else {
+        handleReset();
+        setSelectedMonth(monthStart(payload.entry_date));
+        await fetchData();
+      }
+
+      setSaving(false);
+    } finally {
+      handleSubmitInFlight.current = false;
     }
-
-    setSaving(false);
   }
 
   function handleEdit(entry: SandWashingDailyEntry) {
@@ -349,13 +362,14 @@ export default function SandWashingOperations({
     setDeleting(true);
     setError('');
 
-    const { error: deleteError } = await supabase
+    const { data: deletedRows, error: deleteError } = await supabase
       .from('sand_washing_daily_entries')
       .delete()
-      .eq('id', deleteTarget.id);
+      .eq('id', deleteTarget.id)
+      .select('id');
 
-    if (deleteError) {
-      setError(deleteError.message);
+    if (deleteError || !deletedRows?.length) {
+      setError(friendlyDbError(deleteError));
       setDeleting(false);
       return;
     }
@@ -520,12 +534,10 @@ export default function SandWashingOperations({
                 />
               </Field>
               <Field label="Time of Operation">
-                <input
-                  type="text"
+                <TimeRangeInput
                   value={form.time_of_operation}
-                  onChange={e => updateForm('time_of_operation', e.target.value)}
-                  className="input"
-                  placeholder="ex. 8am-7pm"
+                  onChange={value => updateForm('time_of_operation', value)}
+                  onUseHours={hours => updateForm('operation_hours', String(hours))}
                 />
               </Field>
               <Field label="Number of Dumps">
@@ -594,6 +606,20 @@ export default function SandWashingOperations({
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editingId ? 'Update Daily Input' : 'Save Daily Input'}
                 </button>
+              )}
+              {!editingId && canAdd && (
+                <NoOperationButton
+                  module="sandWashing"
+                  date={form.entry_date}
+                  onError={setError}
+                  onDone={async () => {
+                    const markedDate = form.entry_date;
+                    setError('');
+                    handleReset();
+                    setSelectedMonth(monthStart(markedDate));
+                    await fetchData();
+                  }}
+                />
               )}
               <button
                 type="button"

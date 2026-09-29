@@ -4,6 +4,8 @@ import {
   ArrowRight,
   BarChart3,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Cog,
   Download,
@@ -17,6 +19,9 @@ import {
   Waves,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAll';
+import NoOperationButton from './NoOperationButton';
+import { todayBusinessDate } from '../lib/date';
 import type { NavSection } from '../types';
 import {
   buildOperationsDaySummaries,
@@ -30,10 +35,12 @@ import {
 interface OperationsDashboardProps {
   access: OperationsAccess;
   moduleNavigation: OperationsAccess;
+  /** Modules where this user may tag a day as "No Operation". */
+  canMarkNoOperation?: OperationsAccess;
   onNavigate: (section: NavSection) => void;
 }
 
-type ViewMode = 'day' | 'month';
+type ViewMode = 'day' | 'week' | 'month';
 
 const EMPTY_DATA: OperationsData = {
   stoneCrusher: [],
@@ -43,9 +50,7 @@ const EMPTY_DATA: OperationsData = {
 };
 
 function todayInput() {
-  const now = new Date();
-  const offset = now.getTimezoneOffset();
-  return new Date(now.getTime() - offset * 60_000).toISOString().slice(0, 10);
+  return todayBusinessDate();
 }
 
 function parseDate(value: string) {
@@ -68,6 +73,23 @@ function monthBounds(value: string) {
   const start = new Date(date.getFullYear(), date.getMonth(), 1);
   const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
   return { start: inputDate(start), end: inputDate(end) };
+}
+
+/** Monday-to-Sunday week containing the given date. */
+function weekBounds(value: string) {
+  const day = parseDate(value).getDay();
+  const start = addDays(value, day === 0 ? -6 : 1 - day);
+  return { start, end: addDays(start, 6) };
+}
+
+function formatWeekLabel(start: string, end: string) {
+  const startDate = parseDate(start);
+  const endDate = parseDate(end);
+  const sameMonth = startDate.getMonth() === endDate.getMonth();
+  const sameYear = startDate.getFullYear() === endDate.getFullYear();
+  const startLabel = startDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  const endLabel = endDate.toLocaleDateString('en-PH', { ...(sameMonth ? {} : { month: 'short' }), day: 'numeric', year: 'numeric' });
+  return `${startLabel} – ${endLabel}`;
 }
 
 function datesBetween(start: string, end: string) {
@@ -156,12 +178,14 @@ function ModulePanel({
   status,
   metrics,
   onOpen,
+  footerAction,
 }: {
   title: string;
   icon: React.ReactNode;
   status?: OperationsStatus;
   metrics: Array<{ label: string; value: string }>;
   onOpen?: () => void;
+  footerAction?: React.ReactNode;
 }) {
   return (
     <article className="rounded-lg border border-slate-200 bg-white">
@@ -184,15 +208,18 @@ function ModulePanel({
           </div>
         ))}
       </dl>
-      {onOpen && (
-        <div className="border-t border-slate-100 px-4 py-2.5 text-right">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
-          >
-            Open module <ArrowRight size={14} />
-          </button>
+      {(onOpen || footerAction) && (
+        <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-2.5">
+          <div>{footerAction}</div>
+          {onOpen && (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+            >
+              Open module <ArrowRight size={14} />
+            </button>
+          )}
         </div>
       )}
     </article>
@@ -421,7 +448,7 @@ function CompletenessBars({ rows }: { rows: OperationsDaySummary[] }) {
   );
 }
 
-export default function OperationsDashboard({ access, moduleNavigation, onNavigate }: OperationsDashboardProps) {
+export default function OperationsDashboard({ access, moduleNavigation, canMarkNoOperation, onNavigate }: OperationsDashboardProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [selectedDate, setSelectedDate] = useState(todayInput());
   const [data, setData] = useState<OperationsData>(EMPTY_DATA);
@@ -430,10 +457,13 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
 
   const selectedMonth = selectedDate.slice(0, 7);
   const bounds = useMemo(() => monthBounds(selectedDate), [selectedDate]);
+  const week = useMemo(() => weekBounds(selectedDate), [selectedDate]);
+  // Load enough to cover the 7-day trend, the selected week (which can cross months) and the month.
   const queryStart = useMemo(() => {
     const trendStart = addDays(selectedDate, -6);
-    return trendStart < bounds.start ? trendStart : bounds.start;
-  }, [bounds.start, selectedDate]);
+    return [trendStart, bounds.start, week.start].sort()[0];
+  }, [bounds.start, selectedDate, week.start]);
+  const queryEnd = bounds.end > week.end ? bounds.end : week.end;
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -443,26 +473,26 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
 
     await Promise.all([
       access.stoneCrusher ? (async () => {
-        const result = await supabase.from('stone_crusher_daily_entries').select('*')
-          .gte('entry_date', queryStart).lte('entry_date', bounds.end).order('entry_date');
+        const result = await fetchAllPages(async (from, to) => supabase.from('stone_crusher_daily_entries').select('*')
+          .gte('entry_date', queryStart).lte('entry_date', queryEnd).order('entry_date').order('id').range(from, to));
         if (result.error) failures.push('Stone Crusher');
         else next.stoneCrusher = result.data ?? [];
       })() : Promise.resolve(),
       access.sandWashing ? (async () => {
-        const result = await supabase.from('sand_washing_daily_entries').select('*')
-          .gte('entry_date', queryStart).lte('entry_date', bounds.end).order('entry_date');
+        const result = await fetchAllPages(async (from, to) => supabase.from('sand_washing_daily_entries').select('*')
+          .gte('entry_date', queryStart).lte('entry_date', queryEnd).order('entry_date').order('id').range(from, to));
         if (result.error) failures.push('Sand Washing');
         else next.sandWashing = result.data ?? [];
       })() : Promise.resolve(),
       access.quarrySite ? (async () => {
-        const result = await supabase.from('quarry_site_daily_entries').select('*')
-          .gte('entry_date', queryStart).lte('entry_date', bounds.end).order('entry_date');
+        const result = await fetchAllPages(async (from, to) => supabase.from('quarry_site_daily_entries').select('*')
+          .gte('entry_date', queryStart).lte('entry_date', queryEnd).order('entry_date').order('id').range(from, to));
         if (result.error) failures.push('Quarry Site');
         else next.quarrySite = result.data ?? [];
       })() : Promise.resolve(),
       access.wobbler ? (async () => {
-        const result = await supabase.from('wobbler_daily_entries').select('*')
-          .gte('entry_date', queryStart).lte('entry_date', bounds.end).order('entry_date');
+        const result = await fetchAllPages(async (from, to) => supabase.from('wobbler_daily_entries').select('*')
+          .gte('entry_date', queryStart).lte('entry_date', queryEnd).order('entry_date').order('id').range(from, to));
         if (result.error) failures.push('Wobbler');
         else next.wobbler = result.data ?? [];
       })() : Promise.resolve(),
@@ -471,7 +501,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
     setData(next);
     if (failures.length > 0) setError(`Could not load: ${failures.join(', ')}. Please refresh and try again.`);
     setLoading(false);
-  }, [access, bounds.end, queryStart]);
+  }, [access, queryEnd, queryStart]);
 
   useEffect(() => {
     void loadEntries();
@@ -495,8 +525,22 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
     () => buildOperationsDaySummaries(monthDates, data, access),
     [access, data, monthDates],
   );
-  const visibleRows = viewMode === 'day' ? trendRows : monthRows;
-  const periodRows = viewMode === 'day' ? [currentDay] : monthRows;
+  const weekDates = useMemo(() => {
+    const today = todayInput();
+    // Future days of the current week are not shown yet.
+    return datesBetween(week.start, week.end < today ? week.end : today > week.start ? today : week.start);
+  }, [week.end, week.start]);
+  const weekRows = useMemo(
+    () => buildOperationsDaySummaries(weekDates, data, access),
+    [access, data, weekDates],
+  );
+  const visibleRows = viewMode === 'day' ? trendRows : viewMode === 'week' ? weekRows : monthRows;
+  const periodRows = viewMode === 'day' ? [currentDay] : viewMode === 'week' ? weekRows : monthRows;
+  const periodLabel = viewMode === 'day'
+    ? formatDate(selectedDate)
+    : viewMode === 'week'
+      ? formatWeekLabel(week.start, week.end)
+      : formatDate(`${selectedMonth}-01`, { month: 'long', year: 'numeric' });
   const periodSubmitted = periodRows.reduce((sum, row) => sum + row.submittedCount, 0);
   const periodExpected = periodRows.reduce((sum, row) => sum + row.expectedCount, 0);
   const periodDiesel = periodRows.reduce((sum, row) => sum + row.totalDieselLiters, 0);
@@ -570,7 +614,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
       ]);
     }
 
-    downloadCsv(`daily-operations-${viewMode === 'day' ? selectedDate : selectedMonth}.csv`, rows);
+    downloadCsv(`daily-operations-${viewMode === 'day' ? selectedDate : viewMode === 'week' ? `week-${week.start}` : selectedMonth}.csv`, rows);
   }
 
   return (
@@ -583,7 +627,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-            {(['day', 'month'] as ViewMode[]).map(mode => (
+            {(['day', 'week', 'month'] as ViewMode[]).map(mode => (
               <button
                 key={mode}
                 type="button"
@@ -592,18 +636,29 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
                   viewMode === mode ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                {mode === 'day' ? 'Today / Date' : 'Month'}
+                {mode === 'day' ? 'Today / Date' : mode === 'week' ? 'Week' : 'Month'}
               </button>
             ))}
           </div>
-          <label className="relative">
+          {viewMode === 'week' && (
+            <div className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white">
+              <button type="button" onClick={() => setSelectedDate(addDays(week.start, -7))} aria-label="Previous week" title="Previous week" className="flex h-full w-8 items-center justify-center rounded-l-lg text-slate-500 hover:bg-slate-50">
+                <ChevronLeft size={16} />
+              </button>
+              <span className="whitespace-nowrap px-2 text-xs font-semibold text-slate-700">{formatWeekLabel(week.start, week.end)}</span>
+              <button type="button" onClick={() => setSelectedDate(addDays(week.start, 7))} disabled={addDays(week.start, 7) > todayInput()} aria-label="Next week" title="Next week" className="flex h-full w-8 items-center justify-center rounded-r-lg text-slate-500 hover:bg-slate-50 disabled:opacity-40">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+          <label className="relative" title={viewMode === 'week' ? 'Pick any date to jump to its week' : undefined}>
             <CalendarDays size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-              type={viewMode === 'day' ? 'date' : 'month'}
-              value={viewMode === 'day' ? selectedDate : selectedMonth}
+              type={viewMode === 'month' ? 'month' : 'date'}
+              value={viewMode === 'month' ? selectedMonth : selectedDate}
               onChange={event => {
                 if (!event.target.value) return;
-                if (viewMode === 'day') setSelectedDate(event.target.value);
+                if (viewMode !== 'month') setSelectedDate(event.target.value);
                 else handleMonthChange(event.target.value);
               }}
               className="h-9 rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
@@ -677,7 +732,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-bold text-slate-900">Module Summary</h2>
-                <p className="text-xs text-slate-500">{viewMode === 'day' ? formatDate(selectedDate) : formatDate(`${selectedMonth}-01`, { month: 'long', year: 'numeric' })}</p>
+                <p className="text-xs text-slate-500">{periodLabel}</p>
               </div>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
@@ -687,6 +742,9 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
                   icon={<Factory size={17} />}
                   status={viewMode === 'day' ? currentDay.stoneCrusher.status : undefined}
                   onOpen={moduleNavigation.stoneCrusher ? () => onNavigate('operations-stone-crusher') : undefined}
+                  footerAction={viewMode === 'day' && !currentDay.stoneCrusher.entry && canMarkNoOperation?.stoneCrusher ? (
+                    <NoOperationButton module="stoneCrusher" date={selectedDate} compact onError={setError} onDone={loadEntries} />
+                  ) : undefined}
                   metrics={[
                     { label: 'Entries', value: String(scEntries.length) },
                     { label: 'Operation', value: formatHours(scEntries.reduce((sum, entry) => sum + entry.operation_minutes, 0)) },
@@ -706,6 +764,9 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
                   icon={<Waves size={17} />}
                   status={viewMode === 'day' ? currentDay.sandWashing.status : undefined}
                   onOpen={moduleNavigation.sandWashing ? () => onNavigate('operations-sand-washing') : undefined}
+                  footerAction={viewMode === 'day' && !currentDay.sandWashing.entry && canMarkNoOperation?.sandWashing ? (
+                    <NoOperationButton module="sandWashing" date={selectedDate} compact onError={setError} onDone={loadEntries} />
+                  ) : undefined}
                   metrics={[
                     { label: 'Entries', value: String(swEntries.length) },
                     { label: 'Operation', value: formatHours(swEntries.reduce((sum, entry) => sum + entry.operation_minutes, 0)) },
@@ -725,6 +786,9 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
                   icon={<Mountain size={17} />}
                   status={viewMode === 'day' ? currentDay.quarrySite.status : undefined}
                   onOpen={moduleNavigation.quarrySite ? () => onNavigate('operations-quarry-site') : undefined}
+                  footerAction={viewMode === 'day' && !currentDay.quarrySite.entry && canMarkNoOperation?.quarrySite ? (
+                    <NoOperationButton module="quarrySite" date={selectedDate} compact onError={setError} onDone={loadEntries} />
+                  ) : undefined}
                   metrics={[
                     { label: 'Entries', value: String(qsEntries.length) },
                     { label: 'Binder Trips', value: formatNumber(qsEntries.reduce((sum, entry) => sum + entry.jafcor_binder_trips, 0), 0) },
@@ -744,6 +808,9 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
                   icon={<Cog size={17} />}
                   status={viewMode === 'day' ? currentDay.wobbler.status : undefined}
                   onOpen={moduleNavigation.wobbler ? () => onNavigate('operations-wobbler') : undefined}
+                  footerAction={viewMode === 'day' && !currentDay.wobbler.entry && canMarkNoOperation?.wobbler ? (
+                    <NoOperationButton module="wobbler" date={selectedDate} compact onError={setError} onDone={loadEntries} />
+                  ) : undefined}
                   metrics={[
                     { label: 'Entries', value: String(wbEntries.length) },
                     { label: 'Operation', value: formatHours(wbEntries.reduce((sum, entry) => sum + entry.operation_minutes, 0)) },
@@ -763,7 +830,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
           <section>
             <div className="mb-3">
               <h2 className="text-base font-bold text-slate-900">Operations Trends</h2>
-              <p className="text-xs text-slate-500">{viewMode === 'day' ? 'Latest seven days through the selected date' : 'Daily movement across the selected month'}</p>
+              <p className="text-xs text-slate-500">{viewMode === 'day' ? 'Latest seven days through the selected date' : viewMode === 'week' ? 'Daily movement across the selected week' : 'Daily movement across the selected month'}</p>
             </div>
             <div className="grid gap-4 xl:grid-cols-3">
               <ChartShell
@@ -801,7 +868,7 @@ export default function OperationsDashboard({ access, moduleNavigation, onNaviga
               <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">Consolidated Daily Log</h2>
-                  <p className="text-xs text-slate-500">{viewMode === 'day' ? 'Latest seven days' : 'Daily records for the selected month'}</p>
+                  <p className="text-xs text-slate-500">{viewMode === 'day' ? 'Latest seven days' : viewMode === 'week' ? 'Daily records for the selected week' : 'Daily records for the selected month'}</p>
                 </div>
                 <Truck size={17} className="text-slate-400" />
               </div>

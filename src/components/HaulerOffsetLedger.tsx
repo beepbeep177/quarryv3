@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Banknote,
   CheckCircle,
@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAll';
 import type { Customer, CustomerCreditLedgerRow, HaulerOffsetLedgerRow, Json, TransactionWithRelations, Truck as TruckType } from '../lib/database.types';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
@@ -520,15 +521,25 @@ export default function HaulerOffsetLedger({
 
   async function fetchCustomers() {
     const [{ data, error: customersError }, { data: offsetRows, error: offsetsError }] = await Promise.all([
-      supabase
-        .from('customers')
-        .select('*')
-        .order('name', { ascending: true }),
-      supabase
-        .from('transactions')
-        .select('customer_id')
-        .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
-        .not('customer_id', 'is', null),
+      fetchAllPages<Customer>(async (from, to) => {
+        const page = await supabase
+          .from('customers')
+          .select('*')
+          .order('name', { ascending: true })
+          .order('id')
+          .range(from, to);
+        return { data: page.data as Customer[] | null, error: page.error };
+      }),
+      fetchAllPages<{ customer_id: string | null }>(async (from, to) => {
+        const page = await supabase
+          .from('transactions')
+          .select('customer_id')
+          .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
+          .not('customer_id', 'is', null)
+          .order('id')
+          .range(from, to);
+        return { data: page.data as { customer_id: string | null }[] | null, error: page.error };
+      }),
     ]);
 
     if (customersError) {
@@ -577,18 +588,23 @@ export default function HaulerOffsetLedger({
     setCustomerLoading(true);
     setCustomerError('');
 
-    let query = supabase
-      .from('transactions')
-      .select('*, customers(*), trucks(*)')
-      .gte('transaction_date', targetDateFrom)
-      .lte('transaction_date', targetDateTo)
-      .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT'])
-      .order('transaction_date', { ascending: false })
-      .order('created_at', { ascending: false });
-
-    if (targetCustomerId !== 'ALL') {
-      query = query.eq('customer_id', targetCustomerId);
-    }
+    const query = fetchAllPages<TransactionWithRelations>(async (from, to) => {
+      let pageQuery = supabase
+        .from('transactions')
+        .select('*, customers(*), trucks(*)')
+        .gte('transaction_date', targetDateFrom)
+        .lte('transaction_date', targetDateTo)
+        .in('payment_mode', ['P.O', 'OFFSET', 'SPLIT']);
+      if (targetCustomerId !== 'ALL') {
+        pageQuery = pageQuery.eq('customer_id', targetCustomerId);
+      }
+      const page = await pageQuery
+        .order('transaction_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to);
+      return { data: page.data as TransactionWithRelations[] | null, error: page.error };
+    });
 
     const creditPromise = targetCustomerId === 'ALL'
       ? Promise.resolve({ data: [] as CustomerCreditLedgerRow[], error: null })
@@ -767,136 +783,152 @@ export default function HaulerOffsetLedger({
     return details;
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const saveManualEntryInFlight = useRef(false);
   async function saveManualEntry(event: React.FormEvent) {
     event.preventDefault();
-    if (!haulerId || !canHaulerManualAdd) return;
+    if (saveManualEntryInFlight.current) return;
+    saveManualEntryInFlight.current = true;
+    try {
+      if (!haulerId || !canHaulerManualAdd) return;
 
-    const isHaulingService = form.transaction_type === 'HAULING_SERVICE';
-    let amount = Number(form.amount);
-    if (isHaulingService) {
-      if (selectedHaulerTrucks.length === 0) {
-        setFormError('No assigned hauler trucks found. Assign trucks to this hauler in Logistics first.');
+      const isHaulingService = form.transaction_type === 'HAULING_SERVICE';
+      let amount = Number(form.amount);
+      if (isHaulingService) {
+        if (selectedHaulerTrucks.length === 0) {
+          setFormError('No assigned hauler trucks found. Assign trucks to this hauler in Logistics first.');
+          return;
+        }
+
+        for (const [index, item] of haulingLineTotals.rows.entries()) {
+          const rowLabel = `Line ${index + 1}`;
+          if (!item.truck_id) {
+            setFormError(`${rowLabel}: select an assigned truck.`);
+            return;
+          }
+          if (!Number.isFinite(item.tripsValue) || item.tripsValue <= 0) {
+            setFormError(`${rowLabel}: trips must be greater than zero.`);
+            return;
+          }
+          if (!Number.isFinite(item.rateValue) || item.rateValue <= 0) {
+            setFormError(`${rowLabel}: rate per trip must be greater than zero.`);
+            return;
+          }
+        }
+
+        if (haulingLineTotals.amount <= 0) {
+          setFormError('Total hauling amount must be greater than zero.');
+          return;
+        }
+        amount = haulingLineTotals.amount;
+      }
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setFormError('Amount must be greater than zero.');
         return;
       }
 
-      for (const [index, item] of haulingLineTotals.rows.entries()) {
-        const rowLabel = `Line ${index + 1}`;
-        if (!item.truck_id) {
-          setFormError(`${rowLabel}: select an assigned truck.`);
-          return;
-        }
-        if (!Number.isFinite(item.tripsValue) || item.tripsValue <= 0) {
-          setFormError(`${rowLabel}: trips must be greater than zero.`);
-          return;
-        }
-        if (!Number.isFinite(item.rateValue) || item.rateValue <= 0) {
-          setFormError(`${rowLabel}: rate per trip must be greater than zero.`);
-          return;
-        }
-      }
+      setSaving(true);
+      setError('');
+      setFormError('');
+      const { data: savedEntry, error: rpcError } = await supabase.rpc('create_hauler_offset_entry', {
+        p_hauler_id: haulerId,
+        p_transaction_date: form.transaction_date,
+        p_transaction_type: form.transaction_type,
+        p_reference_no: form.reference_no.trim(),
+        p_description: isHaulingService ? (form.description.trim() || getHaulingDescription()) : form.description.trim(),
+        p_amount: amount,
+        p_entry_side: form.transaction_type === 'OPENING_BALANCE' || form.transaction_type === 'ADJUSTMENT' ? form.entry_side : null,
+        p_remarks: form.remarks.trim(),
+        p_details: buildDetails() as Json,
+      });
+      setSaving(false);
 
-      if (haulingLineTotals.amount <= 0) {
-        setFormError('Total hauling amount must be greater than zero.');
+      if (rpcError) {
+        setFormError(rpcError.message);
         return;
       }
-      amount = haulingLineTotals.amount;
+
+      setShowAddModal(false);
+      setSuccessMessage('Hauler transaction saved successfully.');
+      const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
+      setHighlightedSourceId(savedSourceId);
+      window.setTimeout(() => {
+        setSuccessMessage('');
+        setHighlightedSourceId(null);
+      }, 3500);
+
+      const savedDate = form.transaction_date || todayInput();
+      const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
+      const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
+      if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
+        setQuickFilter('CUSTOM');
+        setDateFrom(nextDateFrom);
+        setDateTo(nextDateTo);
+      }
+      await fetchLedger({ dateFrom: nextDateFrom, dateTo: nextDateTo });
+    } finally {
+      saveManualEntryInFlight.current = false;
     }
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setFormError('Amount must be greater than zero.');
-      return;
-    }
-
-    setSaving(true);
-    setError('');
-    setFormError('');
-    const { data: savedEntry, error: rpcError } = await supabase.rpc('create_hauler_offset_entry', {
-      p_hauler_id: haulerId,
-      p_transaction_date: form.transaction_date,
-      p_transaction_type: form.transaction_type,
-      p_reference_no: form.reference_no.trim(),
-      p_description: isHaulingService ? (form.description.trim() || getHaulingDescription()) : form.description.trim(),
-      p_amount: amount,
-      p_entry_side: form.transaction_type === 'OPENING_BALANCE' || form.transaction_type === 'ADJUSTMENT' ? form.entry_side : null,
-      p_remarks: form.remarks.trim(),
-      p_details: buildDetails() as Json,
-    });
-    setSaving(false);
-
-    if (rpcError) {
-      setFormError(rpcError.message);
-      return;
-    }
-
-    setShowAddModal(false);
-    setSuccessMessage('Hauler transaction saved successfully.');
-    const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
-    setHighlightedSourceId(savedSourceId);
-    window.setTimeout(() => {
-      setSuccessMessage('');
-      setHighlightedSourceId(null);
-    }, 3500);
-
-    const savedDate = form.transaction_date || todayInput();
-    const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
-    const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
-    if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
-      setQuickFilter('CUSTOM');
-      setDateFrom(nextDateFrom);
-      setDateTo(nextDateTo);
-    }
-    await fetchLedger({ dateFrom: nextDateFrom, dateTo: nextDateTo });
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const saveCustomerCreditEntryInFlight = useRef(false);
   async function saveCustomerCreditEntry(event: React.FormEvent) {
     event.preventDefault();
-    if (customerId === 'ALL' || !canCustomerManualAdd) return;
+    if (saveCustomerCreditEntryInFlight.current) return;
+    saveCustomerCreditEntryInFlight.current = true;
+    try {
+      if (customerId === 'ALL' || !canCustomerManualAdd) return;
 
-    const amount = Number(customerCreditForm.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setFormError('Amount must be greater than zero.');
-      return;
+      const amount = Number(customerCreditForm.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setFormError('Amount must be greater than zero.');
+        return;
+      }
+
+      setSaving(true);
+      setCustomerError('');
+      setFormError('');
+      const { data: savedEntry, error: rpcError } = await supabase.rpc('create_customer_credit_entry', {
+        p_customer_id: customerId,
+        p_transaction_date: customerCreditForm.transaction_date,
+        p_transaction_type: customerCreditForm.transaction_type,
+        p_reference_no: customerCreditForm.reference_no.trim(),
+        p_description: customerCreditForm.description.trim(),
+        p_amount: amount,
+        p_entry_side: customerCreditForm.transaction_type === 'OPENING_BALANCE' || customerCreditForm.transaction_type === 'ADJUSTMENT'
+          ? customerCreditForm.entry_side
+          : null,
+        p_remarks: customerCreditForm.remarks.trim(),
+        p_details: {} as Json,
+      });
+      setSaving(false);
+
+      if (rpcError) {
+        setFormError(rpcError.message);
+        return;
+      }
+
+      setShowCustomerCreditModal(false);
+      setSuccessMessage('Customer credit entry saved successfully.');
+      const savedDate = customerCreditForm.transaction_date || todayInput();
+      const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
+      const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
+      if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
+        setQuickFilter('CUSTOM');
+        setDateFrom(nextDateFrom);
+        setDateTo(nextDateTo);
+      }
+      window.setTimeout(() => setSuccessMessage(''), 3500);
+      await fetchCustomerOffsets({ dateFrom: nextDateFrom, dateTo: nextDateTo });
+
+      const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
+      setHighlightedSourceId(savedSourceId);
+      window.setTimeout(() => setHighlightedSourceId(null), 3500);
+    } finally {
+      saveCustomerCreditEntryInFlight.current = false;
     }
-
-    setSaving(true);
-    setCustomerError('');
-    setFormError('');
-    const { data: savedEntry, error: rpcError } = await supabase.rpc('create_customer_credit_entry', {
-      p_customer_id: customerId,
-      p_transaction_date: customerCreditForm.transaction_date,
-      p_transaction_type: customerCreditForm.transaction_type,
-      p_reference_no: customerCreditForm.reference_no.trim(),
-      p_description: customerCreditForm.description.trim(),
-      p_amount: amount,
-      p_entry_side: customerCreditForm.transaction_type === 'OPENING_BALANCE' || customerCreditForm.transaction_type === 'ADJUSTMENT'
-        ? customerCreditForm.entry_side
-        : null,
-      p_remarks: customerCreditForm.remarks.trim(),
-      p_details: {} as Json,
-    });
-    setSaving(false);
-
-    if (rpcError) {
-      setFormError(rpcError.message);
-      return;
-    }
-
-    setShowCustomerCreditModal(false);
-    setSuccessMessage('Customer credit entry saved successfully.');
-    const savedDate = customerCreditForm.transaction_date || todayInput();
-    const nextDateFrom = savedDate < dateFrom ? savedDate : dateFrom;
-    const nextDateTo = savedDate > dateTo ? savedDate : dateTo;
-    if (nextDateFrom !== dateFrom || nextDateTo !== dateTo) {
-      setQuickFilter('CUSTOM');
-      setDateFrom(nextDateFrom);
-      setDateTo(nextDateTo);
-    }
-    window.setTimeout(() => setSuccessMessage(''), 3500);
-    await fetchCustomerOffsets({ dateFrom: nextDateFrom, dateTo: nextDateTo });
-
-    const savedSourceId = typeof savedEntry === 'object' && savedEntry && 'id' in savedEntry ? String(savedEntry.id) : null;
-    setHighlightedSourceId(savedSourceId);
-    window.setTimeout(() => setHighlightedSourceId(null), 3500);
   }
 
   async function settleCustomerReceivable(row: CustomerOffsetRow) {

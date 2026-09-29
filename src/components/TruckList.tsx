@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Truck, PlusCircle, Search, RefreshCw, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, loadErrorMessage, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
+import { fetchAllPages } from '../lib/fetchAll';
 import type { Customer, Truck as TruckType } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
@@ -47,43 +49,62 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
 
   async function fetchTrucks() {
     setLoading(true);
-    const [{ data: truckData }, { data: customerData }] = await Promise.all([
-      supabase.from('trucks').select('*, customers(*)').order('plate_number'),
-      supabase.from('customers').select('*').order('name'),
+    const [{ data: truckData, error: truckError }, { data: customerData, error: customerError }] = await Promise.all([
+      fetchAllPages<TruckWithCustomer>(async (from, to) => {
+        const page = await supabase.from('trucks').select('*, customers(*)').order('plate_number').order('id').range(from, to);
+        return { data: page.data as TruckWithCustomer[] | null, error: page.error };
+      }),
+      fetchAllPages<Customer>(async (from, to) => {
+        const page = await supabase.from('customers').select('*').order('name').order('id').range(from, to);
+        return { data: page.data as Customer[] | null, error: page.error };
+      }),
     ]);
+    if (truckError || customerError) setSaveError(loadErrorMessage('trucks', truckError ?? customerError));
     setTrucks((truckData ?? []) as TruckWithCustomer[]);
     setCustomers((customerData ?? []) as Customer[]);
     setLoading(false);
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleAddInFlight = useRef(false);
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    setSaveError('');
-    if (!form.plate_number.trim()) { setErrors({ plate_number: 'Required' }); return; }
-    setSaving(true);
-    const l = parseFloat(form.length_cm) || 0;
-    const w = parseFloat(form.width_cm) || 0;
-    const h = parseFloat(form.height_cm) || 0;
-    const { data, error } = await supabase.from('trucks').insert({
-      plate_number: form.plate_number.trim().toUpperCase(),
-      driver_name: form.driver_name,
-      customer_id: form.customer_id || null,
-      length_cm: l,
-      width_cm: w,
-      height_cm: h,
-      capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
-      is_hauler: form.is_hauler,
-    }).select('*, customers(*)').maybeSingle();
-    setSaving(false);
-    if (error) {
-      setSaveError(error.message);
-      return;
-    }
-    if (data) {
-      setTrucks(prev => [...prev, data as TruckWithCustomer].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
-      setForm({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '', is_hauler: false });
-      setShowForm(false);
-      setErrors({});
+    if (handleAddInFlight.current) return;
+    handleAddInFlight.current = true;
+    try {
+      setSaveError('');
+      if (!form.plate_number.trim()) { setErrors({ plate_number: 'Required' }); return; }
+      setSaving(true);
+      const l = parseFloat(form.length_cm) || 0;
+      const w = parseFloat(form.width_cm) || 0;
+      const h = parseFloat(form.height_cm) || 0;
+      const { data, error } = await supabase.from('trucks').insert({
+        plate_number: form.plate_number.trim().toUpperCase(),
+        driver_name: form.driver_name,
+        customer_id: form.customer_id || null,
+        length_cm: l,
+        width_cm: w,
+        height_cm: h,
+        capacity_m3: parseFloat(((l * w * h) / 1_000_000).toFixed(4)),
+        is_hauler: form.is_hauler,
+      }).select('*, customers(*)').maybeSingle();
+      setSaving(false);
+      if (error) {
+        setSaveError(friendlyDbError(error));
+        return;
+      }
+      if (!data) {
+        setSaveError(NOT_SAVED_MESSAGE);
+        return;
+      }
+      if (data) {
+        setTrucks(prev => [...prev, data as TruckWithCustomer].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
+        setForm({ plate_number: '', driver_name: '', customer_id: '', length_cm: '', width_cm: '', height_cm: '', is_hauler: false });
+        setShowForm(false);
+        setErrors({});
+      }
+    } finally {
+      handleAddInFlight.current = false;
     }
   }
 
@@ -131,7 +152,11 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
       .maybeSingle();
     setEditSaving(false);
     if (error) {
-      setSaveError(error.message);
+      setSaveError(friendlyDbError(error));
+      return;
+    }
+    if (!data) {
+      setSaveError(NOT_SAVED_MESSAGE);
       return;
     }
     if (data) {
@@ -151,9 +176,9 @@ export default function TruckList({ canAdd = false, canEdit = false, canDelete =
     if (!deleteTarget) return;
     setSaveError('');
     setDeletingId(deleteTarget.id);
-    const { error } = await supabase.from('trucks').delete().eq('id', deleteTarget.id);
-    if (error) {
-      setSaveError(error.message);
+    const { data: deletedRows, error } = await supabase.from('trucks').delete().eq('id', deleteTarget.id).select('id');
+    if (error || !deletedRows?.length) {
+      setSaveError(friendlyDbError(error));
       setDeletingId(null);
       return;
     }

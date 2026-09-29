@@ -11,6 +11,8 @@ import {
   Package,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAll';
+import { dateKeyToDisplayDate, useBusinessToday } from '../lib/date';
 import type { TransactionWithRelations } from '../lib/database.types';
 import { getSplitModeAmount } from '../lib/payment';
 
@@ -37,7 +39,6 @@ interface ProductSalesSummary {
   revenue: number;
 }
 
-const today = new Date().toISOString().split('T')[0];
 
 function formatCurrency(val: number) {
   return new Intl.NumberFormat('en-PH', {
@@ -104,25 +105,43 @@ export default function Dashboard({ onNavigate, onOpenProductReport, refreshKey,
   const [recentTx, setRecentTx] = useState<TransactionWithRelations[]>([]);
   const [productSales, setProductSales] = useState<ProductSalesSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const today = useBusinessToday();
 
   useEffect(() => {
     fetchData();
-  }, [refreshKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey, today]);
 
   async function fetchData() {
     setLoading(true);
     try {
-      const { data: todayTx } = await supabase
-        .from('transactions')
-        .select('*, customers(*), trucks(*)')
-        .eq('transaction_date', today)
-        .order('created_at', { ascending: false });
-
-      const { data: allPending } = await supabase
-        .from('transactions')
-        .select('total_amount')
-        .eq('payment_mode', 'P.O')
-        .eq('status', 'PENDING');
+      setLoadError('');
+      const [{ data: todayTx, error: todayError }, { data: allPending, error: pendingError }] = await Promise.all([
+        fetchAllPages<TransactionWithRelations>(async (from, to) => {
+          const page = await supabase
+            .from('transactions')
+            .select('*, customers(*), trucks(*)')
+            .eq('transaction_date', today)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(from, to);
+          return { data: page.data as TransactionWithRelations[] | null, error: page.error };
+        }),
+        fetchAllPages<{ total_amount: number | null }>(async (from, to) => {
+          const page = await supabase
+            .from('transactions')
+            .select('total_amount')
+            .eq('payment_mode', 'P.O')
+            .eq('status', 'PENDING')
+            .order('id')
+            .range(from, to);
+          return { data: page.data as { total_amount: number | null }[] | null, error: page.error };
+        }),
+      ]);
+      if (todayError || pendingError) {
+        setLoadError(`Some dashboard figures could not be loaded and may be incomplete. ${(todayError ?? pendingError)?.message ?? ''}`);
+      }
 
       const txList = (todayTx ?? []) as TransactionWithRelations[];
       const totalSalesToday = txList.reduce((s, t) => s + (t.total_amount ?? 0), 0);
@@ -234,7 +253,7 @@ export default function Dashboard({ onNavigate, onOpenProductReport, refreshKey,
           <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
           <div className="flex items-center gap-1.5 mt-1 text-slate-500 text-sm">
             <CalendarDays size={14} />
-            <span>{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            <span>{dateKeyToDisplayDate(today).toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
           </div>
         </div>
         <button
@@ -246,6 +265,12 @@ export default function Dashboard({ onNavigate, onOpenProductReport, refreshKey,
           Refresh
         </button>
       </div>
+      {loadError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{loadError}</span>
+          <button type="button" onClick={() => void fetchData()} className="shrink-0 font-semibold underline">Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {statCards.map(card => (

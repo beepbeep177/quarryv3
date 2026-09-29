@@ -40,7 +40,7 @@ describe('buildOperationsDaySummary', () => {
     expect(result.submittedCount).toBe(1);
     expect(result.completenessPercent).toBe(25);
     expect(result.stoneCrusher.status).toBe('No Operation');
-    expect(result.sandWashing.status).toBe('Missing Entry');
+    expect(result.sandWashing.status).toBe('No Operation');
   });
 
   it('combines diesel without mixing output units', () => {

@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { DollarSign, PlusCircle, RefreshCw, X, Loader2, Tag, Pencil, Trash2, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, loadErrorMessage } from '../lib/dbErrors';
+import { fetchAllPages } from '../lib/fetchAll';
+import { todayBusinessDate } from '../lib/date';
 import type { Pricing } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
@@ -23,7 +26,7 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
   const [pricingList, setPricingList] = useState<Pricing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ material_type: '', unit_price: '', effective_date: new Date().toISOString().split('T')[0] });
+  const [form, setForm] = useState({ material_type: '', unit_price: '', effective_date: todayBusinessDate() });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<{ material_type?: string; unit_price?: string }>({});
   const [editingPricing, setEditingPricing] = useState<Pricing | null>(null);
@@ -33,6 +36,7 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Pricing | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const canManage = canAdd || canEdit || canDelete;
@@ -42,29 +46,46 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
 
   async function fetchPricing() {
     setLoading(true);
-    const { data } = await supabase.from('pricing').select('*').order('material_type');
+    const { data, error } = await fetchAllPages<Pricing>(async (from, to) => {
+      const page = await supabase.from('pricing').select('*').order('material_type').order('id').range(from, to);
+      return { data: page.data as Pricing[] | null, error: page.error };
+    });
+    if (error) setSaveError(loadErrorMessage('pricing', error));
     setPricingList((data ?? []) as Pricing[]);
     setLoading(false);
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleAddInFlight = useRef(false);
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    const errs: typeof errors = {};
-    if (!form.material_type.trim()) errs.material_type = 'Required';
-    if (!form.unit_price || parseFloat(form.unit_price) <= 0) errs.unit_price = 'Must be > 0';
-    if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    setSaving(true);
-    const { data } = await supabase.from('pricing').insert({
-      material_type: form.material_type.trim(),
-      unit_price: parseFloat(form.unit_price),
-      effective_date: form.effective_date,
-    }).select().maybeSingle();
-    setSaving(false);
-    if (data) {
-      setPricingList(prev => [...prev, data as Pricing].sort((a, b) => a.material_type.localeCompare(b.material_type)));
-      setForm({ material_type: '', unit_price: '', effective_date: new Date().toISOString().split('T')[0] });
-      setShowForm(false);
-      setErrors({});
+    if (handleAddInFlight.current) return;
+    handleAddInFlight.current = true;
+    try {
+      const errs: typeof errors = {};
+      if (!form.material_type.trim()) errs.material_type = 'Required';
+      if (!form.unit_price || parseFloat(form.unit_price) <= 0) errs.unit_price = 'Must be > 0';
+      if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+      setSaving(true);
+      setSaveError('');
+      const { data, error } = await supabase.from('pricing').insert({
+        material_type: form.material_type.trim(),
+        unit_price: parseFloat(form.unit_price),
+        effective_date: form.effective_date,
+      }).select().maybeSingle();
+      setSaving(false);
+      if (error || !data) {
+        setSaveError(friendlyDbError(error));
+        return;
+      }
+      if (data) {
+        setPricingList(prev => [...prev, data as Pricing].sort((a, b) => a.material_type.localeCompare(b.material_type)));
+        setForm({ material_type: '', unit_price: '', effective_date: todayBusinessDate() });
+        setShowForm(false);
+        setErrors({});
+      }
+    } finally {
+      handleAddInFlight.current = false;
     }
   }
 
@@ -86,7 +107,8 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
     if (!editForm.unit_price || parseFloat(editForm.unit_price) <= 0) errs.unit_price = 'Must be > 0';
     if (Object.keys(errs).length > 0) { setEditErrors(errs); return; }
     setEditSaving(true);
-    const { data } = await supabase
+    setSaveError('');
+    const { data, error } = await supabase
       .from('pricing')
       .update({
         material_type: editForm.material_type.trim(),
@@ -97,6 +119,10 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
       .select()
       .maybeSingle();
     setEditSaving(false);
+    if (error || !data) {
+      setSaveError(friendlyDbError(error));
+      return;
+    }
     if (data) {
       setPricingList(prev =>
         prev.map(p => p.id === editingPricing!.id ? data as Pricing : p)
@@ -114,9 +140,9 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
     if (!deleteTarget) return;
     setDeleteError('');
     setDeletingId(deleteTarget.id);
-    const { error } = await supabase.from('pricing').delete().eq('id', deleteTarget.id);
-    if (error) {
-      setDeleteError(error.message);
+    const { data: deletedRows, error } = await supabase.from('pricing').delete().eq('id', deleteTarget.id).select('id');
+    if (error || !deletedRows?.length) {
+      setDeleteError(friendlyDbError(error));
       setDeletingId(null);
       return;
     }
@@ -160,9 +186,9 @@ export default function PricingList({ canAdd = false, canEdit = false, canDelete
 
       {!canManage && <ReadOnlyNotice message="This user group can review pricing only." />}
 
-      {deleteError && (
+      {(deleteError || saveError) && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {deleteError}
+          {deleteError || saveError}
         </div>
       )}
 

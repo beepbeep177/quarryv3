@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   Clock3,
   Cog,
@@ -16,12 +16,15 @@ import {
   Users,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
 import type { WobblerDailyEntry } from '../lib/database.types';
 import { calculateWobblerMetrics, getWobblerStatus, type WobblerStatus } from '../lib/wobblerOperations';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import NoOperationButton from './NoOperationButton';
+import TimeRangeInput from './TimeRangeInput';
 
 const PAGE_SIZE = 8;
 
@@ -266,41 +269,51 @@ export default function WobblerOperations({
     [filteredEntries, currentPage],
   );
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleSubmitInFlight = useRef(false);
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (editingId && !canEdit) return;
-    if (!editingId && !canAdd) return;
+    if (handleSubmitInFlight.current) return;
+    handleSubmitInFlight.current = true;
+    try {
+      if (editingId && !canEdit) return;
+      if (!editingId && !canAdd) return;
 
-    setSaving(true);
-    setError('');
+      setSaving(true);
+      setError('');
 
-    const payload = {
-      entry_date: form.entry_date,
-      operation_minutes: preview.operationMinutes,
-      downtime_minutes: preview.downtimeMinutes,
-      time_schedule: form.time_schedule.trim(),
-      breakdown: form.breakdown.trim(),
-      number_of_dumps: preview.dumps,
-      number_of_loaders: preview.loaders,
-      genset_diesel_consumption_liters: preview.dieselLiters,
-      notes: form.notes.trim(),
-    };
+      const payload = {
+        entry_date: form.entry_date,
+        operation_minutes: preview.operationMinutes,
+        downtime_minutes: preview.downtimeMinutes,
+        time_schedule: form.time_schedule.trim(),
+        breakdown: form.breakdown.trim(),
+        number_of_dumps: preview.dumps,
+        number_of_loaders: preview.loaders,
+        genset_diesel_consumption_liters: preview.dieselLiters,
+        notes: form.notes.trim(),
+      };
 
-    const result = editingId
-      ? await supabase.from('wobbler_daily_entries').update(payload).eq('id', editingId)
-      : await supabase.from('wobbler_daily_entries').insert(payload);
+      const result = editingId
+        ? await supabase.from('wobbler_daily_entries').update(payload).eq('id', editingId).select('id')
+        : await supabase.from('wobbler_daily_entries').insert(payload).select('id');
 
-    if (result.error) {
-      setError(result.error.code === '23505'
-        ? 'There is already a Wobbler entry for this date. Open that row to edit it.'
-        : result.error.message);
-    } else {
-      handleReset();
-      setSelectedMonth(monthStart(payload.entry_date));
-      await fetchData();
+      if (result.error) {
+        setError(result.error.code === '23505'
+          ? 'There is already a Wobbler entry for this date. Open that row to edit it.'
+          : friendlyDbError(result.error));
+      } else if (!result.data?.length) {
+        setError(NOT_SAVED_MESSAGE);
+      } else {
+        handleReset();
+        setSelectedMonth(monthStart(payload.entry_date));
+        await fetchData();
+      }
+
+      setSaving(false);
+    } finally {
+      handleSubmitInFlight.current = false;
     }
-
-    setSaving(false);
   }
 
   function handleEdit(entry: WobblerDailyEntry) {
@@ -323,13 +336,14 @@ export default function WobblerOperations({
     setDeleting(true);
     setError('');
 
-    const { error: deleteError } = await supabase
+    const { data: deletedRows, error: deleteError } = await supabase
       .from('wobbler_daily_entries')
       .delete()
-      .eq('id', deleteTarget.id);
+      .eq('id', deleteTarget.id)
+      .select('id');
 
-    if (deleteError) {
-      setError(deleteError.message);
+    if (deleteError || !deletedRows?.length) {
+      setError(friendlyDbError(deleteError));
       setDeleting(false);
       return;
     }
@@ -438,7 +452,7 @@ export default function WobblerOperations({
                 <input type="date" value={form.entry_date} onChange={event => updateForm('entry_date', event.target.value)} className="input" required />
               </Field>
               <Field label="Time Schedule">
-                <input type="text" value={form.time_schedule} onChange={event => updateForm('time_schedule', event.target.value)} className="input" placeholder="ex. 11am-4pm" />
+                <TimeRangeInput value={form.time_schedule} onChange={value => updateForm('time_schedule', value)} onUseHours={hours => updateForm('operation_hours', String(hours))} />
               </Field>
               <Field label="Operation Hours" helper={`${preview.operationMinutes} mins`}>
                 <input type="number" min="0" step="0.01" value={form.operation_hours} onChange={event => updateForm('operation_hours', event.target.value)} className="input" placeholder="ex. 4" />
@@ -470,6 +484,20 @@ export default function WobblerOperations({
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editingId ? 'Update Daily Input' : 'Save Daily Input'}
                 </button>
+              )}
+              {!editingId && canAdd && (
+                <NoOperationButton
+                  module="wobbler"
+                  date={form.entry_date}
+                  onError={setError}
+                  onDone={async () => {
+                    const markedDate = form.entry_date;
+                    setError('');
+                    handleReset();
+                    setSelectedMonth(monthStart(markedDate));
+                    await fetchData();
+                  }}
+                />
               )}
               <button type="button" onClick={handleReset} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50">
                 <RotateCcw size={16} />

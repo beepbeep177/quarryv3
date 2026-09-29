@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, Trash2, Droplet, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, loadErrorMessage } from '../lib/dbErrors';
+import { fetchAllPages } from '../lib/fetchAll';
 import type { ExpenseWithCategory } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
@@ -53,12 +55,17 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
   async function fetchExpenses() {
     setInternalLoading(true);
     setError('');
-    const { data, error: fetchError } = await supabase
-      .from('expenses')
-      .select('*, expense_categories(*)')
-      .order('expense_date', { ascending: false })
-      .order('created_at', { ascending: false });
-    if (fetchError) setError(fetchError.message);
+    const { data, error: fetchError } = await fetchAllPages<ExpenseWithCategory>(async (from, to) => {
+      const page = await supabase
+        .from('expenses')
+        .select('*, expense_categories(*)')
+        .order('expense_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to);
+      return { data: page.data as ExpenseWithCategory[] | null, error: page.error };
+    });
+    if (fetchError) setError(loadErrorMessage('expenses', fetchError));
     setInternalExpenses((data ?? []) as ExpenseWithCategory[]);
     setInternalLoading(false);
   }
@@ -80,9 +87,9 @@ export default function ExpensesLedger({ refreshKey = 0, expenses: providedExpen
     if (!deleteTarget) return;
     setDeletingId(deleteTarget.id);
     setError('');
-    const { error: deleteError } = await supabase.from('expenses').delete().eq('id', deleteTarget.id);
-    if (deleteError) {
-      setError(deleteError.message);
+    const { data: deletedRows, error: deleteError } = await supabase.from('expenses').delete().eq('id', deleteTarget.id).select('id');
+    if (deleteError || !deletedRows?.length) {
+      setError(friendlyDbError(deleteError));
       setDeletingId(null);
       return;
     }

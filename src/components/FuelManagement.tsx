@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   Fuel,
+  Info,
   History,
   Loader2,
   Pencil,
@@ -24,6 +25,7 @@ import { paginate } from '../lib/pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import ActionModal from './ActionModal';
 import { fetchAllPages } from '../lib/fetchAll';
+import { todayBusinessDate } from '../lib/date';
 
 const PAGE_SIZE = 8;
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
@@ -57,7 +59,52 @@ interface EquipmentFormState {
 }
 
 function todayInput() {
-  return new Date().toISOString().split('T')[0];
+  return todayBusinessDate();
+}
+
+const MAX_BACKDATE_DAYS = 30;
+const REMARK_REQUIRED_AFTER_DAYS = 7;
+const MAX_PRICE_PER_LITER = 200;
+const PRICE_DEVIATION_LIMIT = 0.3;
+
+function daysBetween(fromDate: string, toDate: string) {
+  return Math.round((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / 86400000);
+}
+
+type EntryCheck = { block?: string; warnings: string[] };
+
+function checkEntryDate(date: string, remarks: string | null): EntryCheck {
+  const today = todayInput();
+  if (!date) return { block: 'Enter a date.', warnings: [] };
+  if (date > today) return { block: 'The date cannot be in the future.', warnings: [] };
+  const age = daysBetween(date, today);
+  if (remarks !== null && age > REMARK_REQUIRED_AFTER_DAYS && !remarks.trim()) {
+    return { block: `This entry is ${age} days old. Add a remark explaining the late entry (e.g. "from logbook").`, warnings: [] };
+  }
+  return { warnings: age > MAX_BACKDATE_DAYS ? [`The date is ${age} days ago. Make sure the month and year are correct.`] : [] };
+}
+
+function checkUnitCost(unitCost: number, averageCost: number): string[] {
+  if (!(unitCost > 0)) return [];
+  if (unitCost > MAX_PRICE_PER_LITER) {
+    return [`Price / L is ₱${unitCost.toLocaleString('en-PH')} per liter. Did you enter the total amount instead of the price per liter?`];
+  }
+  if (averageCost > 0 && Math.abs(unitCost - averageCost) / averageCost > PRICE_DEVIATION_LIMIT) {
+    const pct = Math.round(((unitCost - averageCost) / averageCost) * 100);
+    return [`Price / L (₱${unitCost.toFixed(2)}) is ${pct > 0 ? '+' : ''}${pct}% from the current average cost (₱${averageCost.toFixed(2)}).`];
+  }
+  return [];
+}
+
+function FormGuide({ tips }: { tips: string[] }) {
+  return (
+    <details className="-mt-2 mb-4 text-xs text-slate-500">
+      <summary className="cursor-pointer select-none font-medium text-emerald-700 hover:text-emerald-800">Quick tips</summary>
+      <ul className="mt-2 list-disc space-y-1 pl-4">
+        {tips.map(tip => <li key={tip}>{tip}</li>)}
+      </ul>
+    </details>
+  );
 }
 
 function monthStartInput() {
@@ -105,6 +152,44 @@ function formatDate(value: string) {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+function localDateKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString('en-PH', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function isBackdated(transactionDate: string, createdAt?: string | null) {
+  if (!createdAt) return false;
+  const encoded = localDateKey(createdAt);
+  return Boolean(encoded) && encoded > transactionDate;
+}
+
+function EncodedNote({ transactionDate, createdAt, always = false }: { transactionDate: string; createdAt?: string | null; always?: boolean }) {
+  if (!createdAt) return null;
+  const backdated = isBackdated(transactionDate, createdAt);
+  if (!backdated && !always) return null;
+  return (
+    <p className={`text-[11px] font-medium ${backdated ? 'text-amber-600' : 'text-slate-400'}`} title={backdated ? 'Entry was encoded after its transaction date' : 'Encoded on'}>
+      Encoded {formatDateTime(createdAt)}
+    </p>
+  );
+}
+
+function ReversedBadge() {
+  return <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700">Reversed</span>;
 }
 
 function formatTruckTarget(truck: TruckType) {
@@ -200,6 +285,8 @@ export default function FuelManagement({
   const [issuancePage, setIssuancePage] = useState(1);
   const [equipmentPage, setEquipmentPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
+  const [ledgerOrder, setLedgerOrder] = useState<'encoded' | 'date'>('encoded');
+  const fuelRequestId = useRef(0);
 
   const [purchaseForm, setPurchaseForm] = useState({
     purchase_date: todayInput(),
@@ -239,6 +326,8 @@ export default function FuelManagement({
   });
   const [equipmentSaving, setEquipmentSaving] = useState(false);
   const [reverseTarget, setReverseTarget] = useState<FuelInventoryLedger | null>(null);
+  const [reencodeAfterReverse, setReencodeAfterReverse] = useState(false);
+  const [pendingSave, setPendingSave] = useState<{ kind: 'purchase' | 'issuance' | 'adjustment'; warnings: string[] } | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<CompanyEquipment | null>(null);
   const [infoModal, setInfoModal] = useState('');
   const [adjustmentForm, setAdjustmentForm] = useState({
@@ -256,62 +345,81 @@ export default function FuelManagement({
   const monthStart = useMemo(() => monthStartInput(), []);
 
   const fetchFuelData = useCallback(async () => {
+    const requestId = ++fuelRequestId.current;
     setLoading(true);
     setError('');
-    const [branchResult, stateResult, purchaseResult, issuanceResult, ledgerResult, truckResult, equipmentResult] = await Promise.all([
-      fetchAllPages<FuelBranch>(async (from, to) => {
-        const page = await supabase.from('fuel_branches').select('*').eq('is_active', true).order('is_default', { ascending: false }).order('name').range(from, to);
-        return { data: page.data as FuelBranch[] | null, error: page.error };
-      }),
-      fetchAllPages<FuelInventoryState>(async (from, to) => {
-        const page = await supabase.from('fuel_inventory_state').select('*').range(from, to);
-        return { data: page.data as FuelInventoryState[] | null, error: page.error };
-      }),
-      fetchAllPages<FuelPurchase>(async (from, to) => {
-        let query = supabase.from('fuel_purchases').select('*').order('purchase_date', { ascending: false }).order('created_at', { ascending: false });
-        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
-        const page = await query.range(from, to);
-        return { data: page.data as FuelPurchase[] | null, error: page.error };
-      }),
-      fetchAllPages<FuelIssuanceWithTarget>(async (from, to) => {
-        let query = supabase.from('fuel_issuances').select('*, trucks(*), company_equipment(*)').order('issuance_date', { ascending: false }).order('created_at', { ascending: false });
-        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
-        const page = await query.range(from, to);
-        return { data: page.data as FuelIssuanceWithTarget[] | null, error: page.error };
-      }),
-      fetchAllPages<FuelInventoryLedger>(async (from, to) => {
-        let query = supabase.from('fuel_inventory_ledger').select('*').order('movement_date', { ascending: false }).order('created_at', { ascending: false });
-        if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
-        const page = await query.range(from, to);
-        return { data: page.data as FuelInventoryLedger[] | null, error: page.error };
-      }),
-      fetchAllPages<TruckType>(async (from, to) => {
-        const page = await supabase.from('trucks').select('*').order('plate_number').range(from, to);
-        return { data: page.data as TruckType[] | null, error: page.error };
-      }),
-      fetchAllPages<CompanyEquipment>(async (from, to) => {
-        const page = await supabase.from('company_equipment').select('*').eq('is_active', true).order('equipment_type').order('name').range(from, to);
-        return { data: page.data as CompanyEquipment[] | null, error: page.error };
-      }),
-    ]);
+    try {
+      const [branchResult, stateResult, purchaseResult, issuanceResult, ledgerResult, truckResult, equipmentResult] = await Promise.all([
+        fetchAllPages<FuelBranch>(async (from, to) => {
+          const page = await supabase.from('fuel_branches').select('*').eq('is_active', true).order('is_default', { ascending: false }).order('name').range(from, to);
+          return { data: page.data as FuelBranch[] | null, error: page.error };
+        }),
+        fetchAllPages<FuelInventoryState>(async (from, to) => {
+          const page = await supabase.from('fuel_inventory_state').select('*').order('id').range(from, to);
+          return { data: page.data as FuelInventoryState[] | null, error: page.error };
+        }),
+        fetchAllPages<FuelPurchase>(async (from, to) => {
+          let query = supabase.from('fuel_purchases').select('*').order('purchase_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+          const page = await query.range(from, to);
+          return { data: page.data as FuelPurchase[] | null, error: page.error };
+        }),
+        fetchAllPages<FuelIssuanceWithTarget>(async (from, to) => {
+          let query = supabase.from('fuel_issuances').select('*, trucks(*), company_equipment(*)').order('issuance_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+          const page = await query.range(from, to);
+          return { data: page.data as FuelIssuanceWithTarget[] | null, error: page.error };
+        }),
+        fetchAllPages<FuelInventoryLedger>(async (from, to) => {
+          let query = supabase.from('fuel_inventory_ledger').select('*').order('movement_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
+          const page = await query.range(from, to);
+          return { data: page.data as FuelInventoryLedger[] | null, error: page.error };
+        }),
+        fetchAllPages<TruckType>(async (from, to) => {
+          const page = await supabase.from('trucks').select('*').order('plate_number').range(from, to);
+          return { data: page.data as TruckType[] | null, error: page.error };
+        }),
+        fetchAllPages<CompanyEquipment>(async (from, to) => {
+          const page = await supabase.from('company_equipment').select('*').eq('is_active', true).order('equipment_type').order('name').range(from, to);
+          return { data: page.data as CompanyEquipment[] | null, error: page.error };
+        }),
+      ]);
 
-    const firstError = branchResult.error || stateResult.error || purchaseResult.error || issuanceResult.error || ledgerResult.error || truckResult.error || equipmentResult.error;
-    if (firstError) setError(firstError.message);
+      if (requestId !== fuelRequestId.current) return;
+      const firstError = branchResult.error || stateResult.error || purchaseResult.error || issuanceResult.error || ledgerResult.error || truckResult.error || equipmentResult.error;
+      if (firstError) throw new Error(firstError.message);
 
-    const truckRows = truckResult.data;
-    setBranches(branchResult.data);
-    setStates(stateResult.data);
-    setPurchases(purchaseResult.data);
-    setIssuances(issuanceResult.data);
-    setLedger(ledgerResult.data);
-    setHaulerTrucks(truckRows.filter(truck => truck.is_hauler));
-    setCompanyTrucks(truckRows.filter(truck => !truck.is_hauler));
-    setCompanyEquipment(equipmentResult.data);
-    setLoading(false);
+      const truckRows = truckResult.data;
+      setBranches(branchResult.data);
+      setStates(stateResult.data);
+      setPurchases(purchaseResult.data);
+      setIssuances(issuanceResult.data);
+      setLedger(ledgerResult.data);
+      setHaulerTrucks(truckRows.filter(truck => truck.is_hauler));
+      setCompanyTrucks(truckRows.filter(truck => !truck.is_hauler));
+      setCompanyEquipment(equipmentResult.data);
+    } catch (loadError) {
+      if (requestId === fuelRequestId.current) {
+        setError(`Fuel records could not be refreshed. Displayed records may be outdated. ${loadError instanceof Error ? loadError.message : 'Please try again.'}`);
+      }
+    } finally {
+      if (requestId === fuelRequestId.current) setLoading(false);
+    }
   }, [selectedBranchId]);
 
   useEffect(() => {
     fetchFuelData();
+    const refreshOnReturn = () => {
+      if (document.visibilityState === 'visible') void fetchFuelData();
+    };
+    window.addEventListener('focus', refreshOnReturn);
+    document.addEventListener('visibilitychange', refreshOnReturn);
+    return () => {
+      ++fuelRequestId.current;
+      window.removeEventListener('focus', refreshOnReturn);
+      document.removeEventListener('visibilitychange', refreshOnReturn);
+    };
   }, [fetchFuelData]);
 
   useEffect(() => {
@@ -323,7 +431,7 @@ export default function FuelManagement({
     setIssuancePage(1);
     setEquipmentPage(1);
     setHistoryPage(1);
-  }, [search, selectedBranchId, activeTab]);
+  }, [search, selectedBranchId, activeTab, ledgerOrder]);
 
   const filteredPurchases = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -369,31 +477,55 @@ export default function FuelManagement({
 
   const filteredLedger = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return ledger;
-    return ledger.filter(item =>
+    const rows = !q ? ledger : ledger.filter(item =>
       item.movement_type.toLowerCase().includes(q) ||
       item.reference_no.toLowerCase().includes(q) ||
       item.description.toLowerCase().includes(q)
     );
-  }, [ledger, search]);
+    if (ledgerOrder === 'date') return rows;
+    // Encoded order matches how the running balance was actually computed.
+    return [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
+  }, [ledger, ledgerOrder, search]);
+
+  const backdatedLedgerCount = useMemo(
+    () => filteredLedger.filter(item => isBackdated(item.movement_date, item.created_at)).length,
+    [filteredLedger],
+  );
+
+  const reversal = useMemo(() => {
+    const byId = new Map(ledger.map(item => [item.id, item]));
+    const reversedLedgerIds = new Set<string>();
+    const reversedSourceIds = new Set<string>();
+    ledger.forEach(item => {
+      if (!item.reversal_of_ledger_id) return;
+      reversedLedgerIds.add(item.reversal_of_ledger_id);
+      const original = byId.get(item.reversal_of_ledger_id);
+      if (original?.source_id && (original.source_table === 'fuel_purchases' || original.source_table === 'fuel_issuances')) {
+        reversedSourceIds.add(original.source_id);
+      }
+    });
+    return { reversedLedgerIds, reversedSourceIds };
+  }, [ledger]);
 
   const summary = useMemo(() => {
+    const activePurchases = purchases.filter(item => !reversal.reversedSourceIds.has(item.id));
+    const activeIssuances = issuances.filter(item => !reversal.reversedSourceIds.has(item.id));
     const scopedStates = selectedBranchId === 'ALL'
       ? states
       : states.filter(state => state.branch_id === selectedBranchId);
     const currentLiters = scopedStates.reduce((sum, state) => sum + (state.current_liters ?? 0), 0);
     const inventoryValue = scopedStates.reduce((sum, state) => sum + (state.inventory_value ?? 0), 0);
     const averageCost = currentLiters > 0 ? inventoryValue / currentLiters : 0;
-    const purchasedThisMonth = purchases
+    const purchasedThisMonth = activePurchases
       .filter(item => item.purchase_date >= monthStart)
       .reduce((sum, item) => sum + (item.liters ?? 0), 0);
-    const purchaseCostThisMonth = purchases
+    const purchaseCostThisMonth = activePurchases
       .filter(item => item.purchase_date >= monthStart)
       .reduce((sum, item) => sum + (item.total_amount ?? 0), 0);
-    const issuedThisMonth = issuances
+    const issuedThisMonth = activeIssuances
       .filter(item => item.issuance_date >= monthStart)
       .reduce((sum, item) => sum + (item.liters ?? 0), 0);
-    const issuedValueThisMonth = issuances
+    const issuedValueThisMonth = activeIssuances
       .filter(item => item.issuance_date >= monthStart)
       .reduce((sum, item) => sum + (item.total_value ?? 0), 0);
 
@@ -406,44 +538,97 @@ export default function FuelManagement({
       issuedThisMonth,
       issuedValueThisMonth,
     };
-  }, [issuances, monthStart, purchases, selectedBranchId, states]);
+  }, [issuances, monthStart, purchases, reversal, selectedBranchId, states]);
 
   const categoryChartData = useMemo(() => {
     const map: Record<string, number> = {};
     issuances
-      .filter(item => item.issuance_date >= monthStart)
+      .filter(item => item.issuance_date >= monthStart && !reversal.reversedSourceIds.has(item.id))
       .forEach(item => {
         map[item.category] = (map[item.category] ?? 0) + item.liters;
       });
     return Object.entries(map)
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value);
-  }, [issuances, monthStart]);
+  }, [issuances, monthStart, reversal]);
 
-  async function handlePurchaseSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!actionBranchId) return;
-    setSaving(true);
-    setError('');
-    const { error: rpcError } = await supabase.rpc('create_fuel_purchase', {
-      p_branch_id: actionBranchId,
-      p_purchase_date: purchaseForm.purchase_date,
-      p_supplier: purchaseForm.supplier.trim(),
-      p_reference_no: purchaseForm.reference_no.trim(),
-      p_liters: Number(purchaseForm.liters),
-      p_unit_cost: Number(purchaseForm.unit_cost),
-      p_remarks: purchaseForm.remarks.trim(),
-      p_post_to_expenses: purchaseForm.post_to_expenses,
-    });
-    setSaving(false);
+  const actionState = states.find(state => state.branch_id === actionBranchId) ?? null;
+  const actionAverageCost = Number(actionState?.weighted_average_cost ?? 0);
 
-    if (rpcError) {
-      setError(rpcError.message);
+  function runChecks(kind: 'purchase' | 'issuance' | 'adjustment', check: EntryCheck) {
+    if (check.block) {
+      setError(check.block);
       return;
     }
+    setError('');
+    if (check.warnings.length > 0) {
+      setPendingSave({ kind, warnings: check.warnings });
+      return;
+    }
+    void runSave(kind);
+  }
 
-    setPurchaseForm({ purchase_date: todayInput(), supplier: '', reference_no: '', liters: '', unit_cost: '', remarks: '', post_to_expenses: true });
-    await fetchFuelData();
+  async function runSave(kind: 'purchase' | 'issuance' | 'adjustment') {
+    setPendingSave(null);
+    if (kind === 'purchase') await savePurchase();
+    else if (kind === 'issuance') await saveIssuance();
+    else await saveAdjustment();
+  }
+
+  function handlePurchaseSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!actionBranchId) return;
+    const dateCheck = checkEntryDate(purchaseForm.purchase_date, purchaseForm.remarks);
+    if (dateCheck.block) return runChecks('purchase', dateCheck);
+    const liters = Number(purchaseForm.liters);
+    const unitCost = Number(purchaseForm.unit_cost);
+    const reference = purchaseForm.reference_no.trim().toLowerCase();
+    const supplier = purchaseForm.supplier.trim().toLowerCase();
+    const duplicate = purchases.find(item =>
+      item.branch_id === actionBranchId &&
+      !reversal.reversedSourceIds.has(item.id) &&
+      ((reference && item.reference_no.trim().toLowerCase() === reference) ||
+        (item.supplier.trim().toLowerCase() === supplier && item.purchase_date === purchaseForm.purchase_date && Number(item.liters) === liters))
+    );
+    const warnings = [...dateCheck.warnings, ...checkUnitCost(unitCost, actionAverageCost)];
+    if (duplicate) {
+      warnings.push(`A similar purchase already exists: ${duplicate.supplier} ${duplicate.reference_no ? `(${duplicate.reference_no}) ` : ''}on ${formatDate(duplicate.purchase_date)}, ${fmt(Number(duplicate.liters))} L.`);
+    }
+    if (warnings.length > 0) warnings.push(`Total to be saved: ${currency(Math.round(liters * unitCost * 100) / 100)}.`);
+    runChecks('purchase', { warnings });
+  }
+
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const savePurchaseInFlight = useRef(false);
+  async function savePurchase() {
+    if (savePurchaseInFlight.current) return;
+    savePurchaseInFlight.current = true;
+    try {
+      if (!actionBranchId) return;
+      setSaving(true);
+      setError('');
+      const { error: rpcError } = await supabase.rpc('create_fuel_purchase', {
+        p_branch_id: actionBranchId,
+        p_purchase_date: purchaseForm.purchase_date,
+        p_supplier: purchaseForm.supplier.trim(),
+        p_reference_no: purchaseForm.reference_no.trim(),
+        p_liters: Number(purchaseForm.liters),
+        p_unit_cost: Number(purchaseForm.unit_cost),
+        p_remarks: purchaseForm.remarks.trim(),
+        p_post_to_expenses: purchaseForm.post_to_expenses,
+      });
+      setSaving(false);
+
+      if (rpcError) {
+        setError(rpcError.message);
+        return;
+      }
+
+      setPurchaseForm({ purchase_date: todayInput(), supplier: '', reference_no: '', liters: '', unit_cost: '', remarks: '', post_to_expenses: true });
+      await fetchFuelData();
+    } finally {
+      savePurchaseInFlight.current = false;
+    }
   }
 
   async function postPurchaseToExpenses(purchase: FuelPurchase) {
@@ -459,76 +644,174 @@ export default function FuelManagement({
     await fetchFuelData();
   }
 
-  async function handleIssuanceSubmit(e: React.FormEvent) {
+  function handleIssuanceSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!actionBranchId) return;
-    if (issuanceForm.category === CATEGORY_HAULER_OFFSET && !issuanceForm.truck_id) {
-      setError('Select a hauler truck before saving a Hauler Offset fuel issuance.');
+    const dateCheck = checkEntryDate(issuanceForm.issuance_date, issuanceForm.remarks);
+    if (dateCheck.block) return runChecks('issuance', dateCheck);
+    const liters = Number(issuanceForm.liters);
+    const available = Number(actionState?.current_liters ?? 0);
+    if (liters > available) {
+      setError(`Not enough fuel in inventory. Available: ${fmt(available)} L. If a purchase is missing, encode the purchase first.`);
       return;
     }
-    if (issuanceForm.category === CATEGORY_COMPANY_TRUCK && !issuanceForm.truck_id) {
-      setError('Select a company truck before saving this fuel issuance.');
-      return;
+    const warnings = [...dateCheck.warnings];
+    const laterPurchase = purchases.find(item =>
+      item.branch_id === actionBranchId &&
+      !reversal.reversedSourceIds.has(item.id) &&
+      item.purchase_date > issuanceForm.issuance_date
+    );
+    if (laterPurchase) {
+      warnings.push(`This issuance is dated before a purchase already encoded (${laterPurchase.supplier} on ${formatDate(laterPurchase.purchase_date)}). It will use today's stock and average cost (₱${actionAverageCost.toFixed(2)}/L), and will appear with an "Encoded" note in the ledger.`);
     }
-    if (issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT && !issuanceForm.company_equipment_id) {
-      setError('Select company equipment before saving this fuel issuance.');
-      return;
+    const issuedTo = issuanceForm.issued_to.trim().toLowerCase();
+    const duplicate = issuances.find(item =>
+      item.branch_id === actionBranchId &&
+      !reversal.reversedSourceIds.has(item.id) &&
+      item.issuance_date === issuanceForm.issuance_date &&
+      item.category === issuanceForm.category &&
+      item.issued_to.trim().toLowerCase() === issuedTo &&
+      Number(item.liters) === liters &&
+      (item.reference_no ?? '').trim() === issuanceForm.reference_no.trim()
+    );
+    if (duplicate) {
+      warnings.push(`An identical issuance already exists: ${duplicate.issued_to}, ${fmt(Number(duplicate.liters))} L on ${formatDate(duplicate.issuance_date)}. Save only if this is a separate fill-up.`);
     }
-    setSaving(true);
-    setError('');
-    const { error: rpcError } = await supabase.rpc('create_fuel_issuance', {
-      p_branch_id: actionBranchId,
-      p_issuance_date: issuanceForm.issuance_date,
-      p_category: issuanceForm.category,
-      p_issued_to: issuanceForm.issued_to.trim(),
-      p_truck_id: issuanceForm.category === CATEGORY_HAULER_OFFSET || issuanceForm.category === CATEGORY_COMPANY_TRUCK
-        ? issuanceForm.truck_id || null
-        : null,
-      p_reference_no: issuanceForm.reference_no.trim(),
-      p_liters: Number(issuanceForm.liters),
-      p_remarks: issuanceForm.remarks.trim(),
-      p_company_equipment_id: issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT
-        ? issuanceForm.company_equipment_id || null
-        : null,
-    });
-    setSaving(false);
-
-    if (rpcError) {
-      setError(rpcError.message);
-      return;
-    }
-
-    setIssuanceForm({ issuance_date: todayInput(), category: issueCategories[0], issued_to: '', truck_id: '', company_equipment_id: '', reference_no: '', liters: '', remarks: '' });
-    await fetchFuelData();
+    runChecks('issuance', { warnings });
   }
 
-  async function handleAdjustmentSubmit(e: React.FormEvent) {
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const saveIssuanceInFlight = useRef(false);
+  async function saveIssuance() {
+    if (saveIssuanceInFlight.current) return;
+    saveIssuanceInFlight.current = true;
+    try {
+      if (!actionBranchId) return;
+      if (issuanceForm.category === CATEGORY_HAULER_OFFSET && !issuanceForm.truck_id) {
+        setError('Select a hauler truck before saving a Hauler Offset fuel issuance.');
+        return;
+      }
+      if (issuanceForm.category === CATEGORY_COMPANY_TRUCK && !issuanceForm.truck_id) {
+        setError('Select a company truck before saving this fuel issuance.');
+        return;
+      }
+      if (issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT && !issuanceForm.company_equipment_id) {
+        setError('Select company equipment before saving this fuel issuance.');
+        return;
+      }
+      setSaving(true);
+      setError('');
+      const { error: rpcError } = await supabase.rpc('create_fuel_issuance', {
+        p_branch_id: actionBranchId,
+        p_issuance_date: issuanceForm.issuance_date,
+        p_category: issuanceForm.category,
+        p_issued_to: issuanceForm.issued_to.trim(),
+        p_truck_id: issuanceForm.category === CATEGORY_HAULER_OFFSET || issuanceForm.category === CATEGORY_COMPANY_TRUCK
+          ? issuanceForm.truck_id || null
+          : null,
+        p_reference_no: issuanceForm.reference_no.trim(),
+        p_liters: Number(issuanceForm.liters),
+        p_remarks: issuanceForm.remarks.trim(),
+        p_company_equipment_id: issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT
+          ? issuanceForm.company_equipment_id || null
+          : null,
+      });
+      setSaving(false);
+
+      if (rpcError) {
+        setError(rpcError.message);
+        return;
+      }
+
+      setIssuanceForm({ issuance_date: todayInput(), category: issueCategories[0], issued_to: '', truck_id: '', company_equipment_id: '', reference_no: '', liters: '', remarks: '' });
+      await fetchFuelData();
+    } finally {
+      saveIssuanceInFlight.current = false;
+    }
+  }
+
+  function handleAdjustmentSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!actionBranchId) return;
-    setSaving(true);
-    setError('');
-    const { error: rpcError } = await supabase.rpc('create_fuel_adjustment', {
-      p_branch_id: actionBranchId,
-      p_movement_date: adjustmentForm.movement_date,
-      p_liters_delta: Number(adjustmentForm.liters_delta),
-      p_unit_cost: Number(adjustmentForm.unit_cost),
-      p_reference_no: adjustmentForm.reference_no.trim(),
-      p_description: adjustmentForm.description.trim(),
-      p_is_opening_balance: adjustmentForm.is_opening_balance,
-    });
-    setSaving(false);
-
-    if (rpcError) {
-      setError(rpcError.message);
+    const dateCheck = checkEntryDate(adjustmentForm.movement_date, null);
+    if (dateCheck.block) return runChecks('adjustment', dateCheck);
+    const litersDelta = Number(adjustmentForm.liters_delta);
+    const warnings = [...dateCheck.warnings];
+    if (litersDelta > 0) warnings.push(...checkUnitCost(Number(adjustmentForm.unit_cost), actionAverageCost));
+    const available = Number(actionState?.current_liters ?? 0);
+    if (litersDelta < 0 && available + litersDelta < 0) {
+      setError(`Adjustment would make inventory negative. Available: ${fmt(available)} L.`);
       return;
     }
+    runChecks('adjustment', { warnings });
+  }
 
-    setAdjustmentForm({ movement_date: todayInput(), liters_delta: '', unit_cost: '', reference_no: '', description: '', is_opening_balance: false });
-    await fetchFuelData();
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const saveAdjustmentInFlight = useRef(false);
+  async function saveAdjustment() {
+    if (saveAdjustmentInFlight.current) return;
+    saveAdjustmentInFlight.current = true;
+    try {
+      if (!actionBranchId) return;
+      setSaving(true);
+      setError('');
+      const { error: rpcError } = await supabase.rpc('create_fuel_adjustment', {
+        p_branch_id: actionBranchId,
+        p_movement_date: adjustmentForm.movement_date,
+        p_liters_delta: Number(adjustmentForm.liters_delta),
+        p_unit_cost: Number(adjustmentForm.unit_cost),
+        p_reference_no: adjustmentForm.reference_no.trim(),
+        p_description: adjustmentForm.description.trim(),
+        p_is_opening_balance: adjustmentForm.is_opening_balance,
+      });
+      setSaving(false);
+
+      if (rpcError) {
+        setError(rpcError.message);
+        return;
+      }
+
+      setAdjustmentForm({ movement_date: todayInput(), liters_delta: '', unit_cost: '', reference_no: '', description: '', is_opening_balance: false });
+      await fetchFuelData();
+    } finally {
+      saveAdjustmentInFlight.current = false;
+    }
   }
 
   function reverseMovement(item: FuelInventoryLedger) {
+    setReencodeAfterReverse(false);
     setReverseTarget(item);
+  }
+
+  function prefillFromReversed(item: FuelInventoryLedger) {
+    if (item.movement_type === 'PURCHASE' && item.source_table === 'fuel_purchases') {
+      const source = purchases.find(row => row.id === item.source_id);
+      if (!source) return;
+      setPurchaseForm({
+        purchase_date: source.purchase_date,
+        supplier: source.supplier,
+        reference_no: source.reference_no,
+        liters: String(source.liters),
+        unit_cost: String(source.unit_cost),
+        remarks: source.remarks,
+        post_to_expenses: true,
+      });
+      setActiveTab('purchases');
+    } else if (item.movement_type === 'ISSUANCE' && item.source_table === 'fuel_issuances') {
+      const source = issuances.find(row => row.id === item.source_id);
+      if (!source) return;
+      setIssuanceForm({
+        issuance_date: source.issuance_date,
+        category: source.category,
+        issued_to: source.issued_to,
+        truck_id: source.truck_id ?? '',
+        company_equipment_id: source.company_equipment_id ?? '',
+        reference_no: source.reference_no,
+        liters: String(source.liters),
+        remarks: source.remarks,
+      });
+      setActiveTab('issuances');
+    }
   }
 
   async function confirmReverseMovement() {
@@ -546,7 +829,9 @@ export default function FuelManagement({
       return;
     }
 
+    const reversedItem = reverseTarget;
     setReverseTarget(null);
+    if (reencodeAfterReverse) prefillFromReversed(reversedItem);
     await fetchFuelData();
   }
 
@@ -582,30 +867,38 @@ export default function FuelManagement({
     }));
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleEquipmentSubmitInFlight = useRef(false);
   async function handleEquipmentSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canManageEquipment || !equipmentForm.name.trim()) return;
-    setEquipmentSaving(true);
-    setError('');
+    if (handleEquipmentSubmitInFlight.current) return;
+    handleEquipmentSubmitInFlight.current = true;
+    try {
+      if (!canManageEquipment || !equipmentForm.name.trim()) return;
+      setEquipmentSaving(true);
+      setError('');
 
-    const { error: saveError } = await supabase.from('company_equipment').insert({
-      branch_id: equipmentForm.branch_id || null,
-      name: equipmentForm.name.trim(),
-      equipment_type: equipmentForm.equipment_type.trim() || 'Other',
-      plate_or_code: equipmentForm.plate_or_code.trim(),
-      operator_name: equipmentForm.operator_name.trim(),
-      notes: equipmentForm.notes.trim(),
-      is_active: true,
-    });
-    setEquipmentSaving(false);
+      const { error: saveError } = await supabase.from('company_equipment').insert({
+        branch_id: equipmentForm.branch_id || null,
+        name: equipmentForm.name.trim(),
+        equipment_type: equipmentForm.equipment_type.trim() || 'Other',
+        plate_or_code: equipmentForm.plate_or_code.trim(),
+        operator_name: equipmentForm.operator_name.trim(),
+        notes: equipmentForm.notes.trim(),
+        is_active: true,
+      });
+      setEquipmentSaving(false);
 
-    if (saveError) {
-      setError(saveError.message);
-      return;
+      if (saveError) {
+        setError(saveError.message);
+        return;
+      }
+
+      setEquipmentForm({ branch_id: actionBranchId, name: '', equipment_type: equipmentTypes[0], plate_or_code: '', operator_name: '', notes: '' });
+      await fetchFuelData();
+    } finally {
+      handleEquipmentSubmitInFlight.current = false;
     }
-
-    setEquipmentForm({ branch_id: actionBranchId, name: '', equipment_type: equipmentTypes[0], plate_or_code: '', operator_name: '', notes: '' });
-    await fetchFuelData();
   }
 
   function startEquipmentEdit(item: CompanyEquipment) {
@@ -678,16 +971,16 @@ export default function FuelManagement({
       return {
         title: 'Fuel Purchases',
         filename: 'fuel-purchases',
-        headers: ['Date', 'Supplier', 'Reference', 'Liters', 'Unit Cost', 'Total', 'Remarks'],
-        rows: filteredPurchases.map(item => [item.purchase_date, item.supplier, item.reference_no, fmt(item.liters), fmt(item.unit_cost), fmt(item.total_amount), item.remarks]),
+        headers: ['Date', 'Supplier', 'Reference', 'Liters', 'Unit Cost', 'Total', 'Status', 'Encoded At', 'Remarks'],
+        rows: filteredPurchases.map(item => [item.purchase_date, item.supplier, item.reference_no, fmt(item.liters), fmt(item.unit_cost), fmt(item.total_amount), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
       };
     }
     if (activeTab === 'issuances') {
       return {
         title: 'Fuel Issuances',
         filename: 'fuel-issuances',
-        headers: ['Date', 'Category', 'Issued To', 'Truck', 'Equipment', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Remarks'],
-        rows: filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), item.remarks]),
+        headers: ['Date', 'Category', 'Issued To', 'Truck', 'Equipment', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Status', 'Encoded At', 'Remarks'],
+        rows: filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
       };
     }
     if (activeTab === 'equipment') {
@@ -701,8 +994,8 @@ export default function FuelManagement({
     return {
       title: 'Fuel Inventory History',
       filename: 'fuel-inventory-history',
-      headers: ['Date', 'Type', 'Reference', 'Description', 'Liters Delta', 'Unit Cost', 'Value Delta', 'Balance Liters', 'Average Cost'],
-      rows: filteredLedger.map(item => [item.movement_date, item.movement_type, item.reference_no, item.description, fmt(item.liters_delta), fmt(item.unit_cost), fmt(item.value_delta), fmt(item.balance_liters_after), fmt(item.weighted_average_cost_after)]),
+      headers: ['Date', 'Encoded At', 'Type', 'Reference', 'Description', 'Liters Delta', 'Unit Cost', 'Value Delta', 'Balance Liters', 'Average Cost'],
+      rows: filteredLedger.map(item => [item.movement_date, formatDateTime(item.created_at), item.movement_type, item.reference_no, item.description, fmt(item.liters_delta), fmt(item.unit_cost), fmt(item.value_delta), fmt(item.balance_liters_after), fmt(item.weighted_average_cost_after)]),
     };
   }
 
@@ -889,8 +1182,8 @@ export default function FuelManagement({
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
                 <div className="xl:col-span-2 space-y-5">
-                  <RecentIssuances rows={issuances.slice(0, 5)} onViewAll={() => setActiveTab('issuances')} />
-                  <RecentPurchases rows={purchases.slice(0, 5)} onViewAll={() => setActiveTab('purchases')} />
+                  <RecentIssuances rows={issuances.slice(0, 5)} reversedIds={reversal.reversedSourceIds} onViewAll={() => setActiveTab('issuances')} />
+                  <RecentPurchases rows={purchases.slice(0, 5)} reversedIds={reversal.reversedSourceIds} onViewAll={() => setActiveTab('purchases')} />
                 </div>
                 <div className="space-y-5">
                   <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -915,6 +1208,12 @@ export default function FuelManagement({
               {canAddPurchase && (
                 <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
                   <h2 className="font-semibold text-slate-800 mb-4">Add Fuel Purchase</h2>
+                  <FormGuide tips={[
+                    'Price / L is per liter (e.g. 92.70), not the receipt total.',
+                    'Encode purchases before the issuances that used them, so stock and cost stay correct.',
+                    `Entries older than ${REMARK_REQUIRED_AFTER_DAYS} days need a remark.`,
+                    'Wrong entry? Reverse it in Inventory Ledger and tick "Re-encode" to fix it.',
+                  ]} />
                   <form onSubmit={handlePurchaseSubmit} className="space-y-4">
                     <Field label="Date"><input required type="date" value={purchaseForm.purchase_date} onChange={e => setPurchaseForm(f => ({ ...f, purchase_date: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Supplier"><input required value={purchaseForm.supplier} onChange={e => setPurchaseForm(f => ({ ...f, supplier: e.target.value }))} className={inputClass} placeholder="RTM Gas Station" /></Field>
@@ -936,7 +1235,7 @@ export default function FuelManagement({
                 </div>
               )}
               <div className={canAddPurchase ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <PurchasesTable rows={pagedPurchases} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} />
+                <PurchasesTable rows={pagedPurchases} reversedIds={reversal.reversedSourceIds} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} />
                 <Pagination page={purchaseCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredPurchases.length} onPageChange={setPurchasePage} />
               </div>
             </div>
@@ -947,6 +1246,11 @@ export default function FuelManagement({
               {canIssue && (
                 <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
                   <h2 className="font-semibold text-slate-800 mb-4">Issue Fuel</h2>
+                  <FormGuide tips={[
+                    'Issuances use the current stock and average cost, even when backdated.',
+                    'Encode the purchase first if the fuel came from a delivery not yet recorded.',
+                    `Entries older than ${REMARK_REQUIRED_AFTER_DAYS} days need a remark (e.g. "from logbook").`,
+                  ]} />
                   <form onSubmit={handleIssuanceSubmit} className="space-y-4">
                     <Field label="Date"><input required type="date" value={issuanceForm.issuance_date} onChange={e => setIssuanceForm(f => ({ ...f, issuance_date: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Category">
@@ -1003,7 +1307,7 @@ export default function FuelManagement({
                 </div>
               )}
               <div className={canIssue ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <IssuancesTable rows={pagedIssuances} />
+                <IssuancesTable rows={pagedIssuances} reversedIds={reversal.reversedSourceIds} />
                 <Pagination page={issuanceCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredIssuances.length} onPageChange={setIssuancePage} />
               </div>
             </div>
@@ -1061,6 +1365,10 @@ export default function FuelManagement({
               {canAdjust && (
                 <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
                   <h2 className="font-semibold text-slate-800 mb-4">Inventory Adjustment</h2>
+                  <FormGuide tips={[
+                    'Use only for physical count differences. Negative liters = deduction.',
+                    'To fix a wrong purchase or issuance, use Reverse in the table instead.',
+                  ]} />
                   <form onSubmit={handleAdjustmentSubmit} className="space-y-4">
                     <Field label="Date"><input required type="date" value={adjustmentForm.movement_date} onChange={e => setAdjustmentForm(f => ({ ...f, movement_date: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Liters Delta"><input required type="number" step="0.01" value={adjustmentForm.liters_delta} onChange={e => setAdjustmentForm(f => ({ ...f, liters_delta: e.target.value }))} className={inputClass} placeholder="Use negative for deduction" /></Field>
@@ -1079,7 +1387,26 @@ export default function FuelManagement({
                 </div>
               )}
               <div className={canAdjust ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <HistoryTable rows={pagedLedger} canAdjust={canAdjust} onReverse={reverseMovement} saving={saving} />
+                <div className="mb-3 flex flex-col gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex gap-2.5">
+                    <Info size={16} className="mt-0.5 shrink-0 text-sky-600" />
+                    <div>
+                      <p className="font-semibold">How to read the Balance column</p>
+                      <p className="mt-0.5 text-sky-800">
+                        Balance is the inventory right after each entry was <span className="font-semibold">encoded</span>, not after its transaction date.
+                        {backdatedLedgerCount > 0 && (
+                          <> <span className="font-semibold text-amber-700">{backdatedLedgerCount} {backdatedLedgerCount === 1 ? 'entry was' : 'entries were'} encoded later than its transaction date</span> (marked in orange), so sorting by transaction date can make the balance look like it jumped.</>
+                        )}
+                        {' '}Use <span className="font-semibold">Encoded order</span> to follow the actual step-by-step balance.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="inline-flex shrink-0 self-start rounded-lg border border-sky-200 bg-white p-0.5 text-xs font-semibold">
+                    <button type="button" onClick={() => setLedgerOrder('encoded')} className={`rounded-md px-3 py-1.5 ${ledgerOrder === 'encoded' ? 'bg-sky-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Encoded order</button>
+                    <button type="button" onClick={() => setLedgerOrder('date')} className={`rounded-md px-3 py-1.5 ${ledgerOrder === 'date' ? 'bg-sky-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Transaction date</button>
+                  </div>
+                </div>
+                <HistoryTable rows={pagedLedger} reversedLedgerIds={reversal.reversedLedgerIds} showEncoded={ledgerOrder === 'encoded'} canAdjust={canAdjust} onReverse={reverseMovement} saving={saving} />
                 <Pagination page={historyCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredLedger.length} onPageChange={setHistoryPage} />
               </div>
             </div>
@@ -1107,6 +1434,51 @@ export default function FuelManagement({
             <p className="mt-1 font-bold text-slate-800">{reverseTarget ? `${fmt(reverseTarget.liters_delta)} L` : '-'}</p>
           </div>
         </div>
+        {reverseTarget && (() => {
+          const state = states.find(item => item.branch_id === reverseTarget.branch_id);
+          const currentLiters = Number(state?.current_liters ?? 0);
+          const currentValue = Number(state?.inventory_value ?? 0);
+          const nextLiters = currentLiters - Number(reverseTarget.liters_delta);
+          const rawValue = currentValue - Number(reverseTarget.value_delta);
+          const nextValue = Math.max(rawValue, 0);
+          const canReencode = (reverseTarget.movement_type === 'PURCHASE' && canAddPurchase) || (reverseTarget.movement_type === 'ISSUANCE' && canIssue);
+          return (
+            <div className="mt-3 space-y-2 text-sm">
+              <div className="rounded-lg border border-slate-200 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inventory after reversal</p>
+                <p className="mt-1 text-slate-700">
+                  {fmt(currentLiters)} L → <span className={`font-bold ${nextLiters < 0 ? 'text-red-600' : 'text-slate-900'}`}>{fmt(nextLiters)} L</span>
+                  <span className="text-slate-400"> · </span>
+                  {currency(currentValue)} → <span className="font-bold text-slate-900">{currency(nextValue)}</span>
+                </p>
+              </div>
+              {nextLiters < 0 && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">Not allowed: this fuel has already been issued. Reverse the related issuances first.</p>}
+              {nextLiters >= 0 && rawValue < 0 && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Inventory value will be set to ₱0 while liters remain. Consider an adjustment to correct the value afterwards.</p>}
+              {canReencode && nextLiters >= 0 && (
+                <label className="flex items-center gap-2 text-slate-700">
+                  <input type="checkbox" checked={reencodeAfterReverse} onChange={e => setReencodeAfterReverse(e.target.checked)} className="h-4 w-4 accent-emerald-500" />
+                  Re-encode after reversing (opens the form with this entry's details)
+                </label>
+              )}
+            </div>
+          );
+        })()}
+      </ActionModal>
+
+      <ActionModal
+        open={!!pendingSave}
+        title="Please double-check"
+        description="Review the following before saving."
+        variant="warning"
+        confirmLabel="Save Anyway"
+        cancelLabel="Go Back"
+        loading={saving}
+        onClose={() => setPendingSave(null)}
+        onConfirm={() => pendingSave ? runSave(pendingSave.kind) : undefined}
+      >
+        <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-700">
+          {pendingSave?.warnings.map(warning => <li key={warning}>{warning}</li>)}
+        </ul>
       </ActionModal>
 
       <ActionModal
@@ -1149,31 +1521,31 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function RecentIssuances({ rows, onViewAll }: { rows: FuelIssuanceWithTarget[]; onViewAll: () => void }) {
+function RecentIssuances({ rows, reversedIds, onViewAll }: { rows: FuelIssuanceWithTarget[]; reversedIds: Set<string>; onViewAll: () => void }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
         <h2 className="font-semibold text-slate-800">Recent Fuel Issuances</h2>
         <button onClick={onViewAll} className="text-sm text-emerald-600 font-medium hover:text-emerald-700">View All</button>
       </div>
-      <IssuancesTable rows={rows} compact />
+      <IssuancesTable rows={rows} reversedIds={reversedIds} compact />
     </div>
   );
 }
 
-function RecentPurchases({ rows, onViewAll }: { rows: FuelPurchase[]; onViewAll: () => void }) {
+function RecentPurchases({ rows, reversedIds, onViewAll }: { rows: FuelPurchase[]; reversedIds: Set<string>; onViewAll: () => void }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
         <h2 className="font-semibold text-slate-800">Recent Fuel Purchases</h2>
         <button onClick={onViewAll} className="text-sm text-emerald-600 font-medium hover:text-emerald-700">View All</button>
       </div>
-      <PurchasesTable rows={rows} compact />
+      <PurchasesTable rows={rows} reversedIds={reversedIds} compact />
     </div>
   );
 }
 
-function PurchasesTable({ rows, compact = false, canPost = false, saving = false, onPost }: { rows: FuelPurchase[]; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void }) {
+function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, saving = false, onPost }: { rows: FuelPurchase[]; reversedIds?: Set<string>; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void }) {
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -1193,18 +1565,23 @@ function PurchasesTable({ rows, compact = false, canPost = false, saving = false
             {rows.length === 0 ? (
               <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
             ) : rows.map(item => (
-              <tr key={item.id} className="hover:bg-slate-50">
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(item.purchase_date)}</td>
+              <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
+                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
+                  {formatDate(item.purchase_date)}
+                  <EncodedNote transactionDate={item.purchase_date} createdAt={item.created_at} />
+                </td>
                 <td className="px-4 py-3 text-slate-800 font-medium">{item.supplier}</td>
                 <td className="px-4 py-3 text-slate-500 font-mono text-xs">{item.reference_no || '—'}</td>
                 <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>
                 <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{currency(item.unit_cost)}</td>
                 <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(item.total_amount)}</td>
                 <td className="px-4 py-3 text-center">
-                  {item.expense_id ? (
-                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">Posted</span>
+                  {reversedIds?.has(item.id) ? (
+                    <ReversedBadge />
+                  ) : item.expense_id ? (
+                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">Expense Posted</span>
                   ) : canPost && !compact ? (
-                    <button type="button" onClick={() => onPost?.(item)} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"><ClipboardList size={12} /> Post</button>
+                    <button type="button" onClick={() => onPost?.(item)} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"><ClipboardList size={12} /> Post to Expenses</button>
                   ) : (
                     <span className="text-xs text-slate-400">Unposted</span>
                   )}
@@ -1331,7 +1708,7 @@ function EquipmentTable({
   );
 }
 
-function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTarget[]; compact?: boolean }) {
+function IssuancesTable({ rows, reversedIds, compact = false }: { rows: FuelIssuanceWithTarget[]; reversedIds?: Set<string>; compact?: boolean }) {
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -1351,9 +1728,17 @@ function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTarge
             {rows.length === 0 ? (
               <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No fuel issuances found</td></tr>
             ) : rows.map(item => (
-              <tr key={item.id} className="hover:bg-slate-50">
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(item.issuance_date)}</td>
-                <td className="px-4 py-3"><span className="inline-flex px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">{item.category}</span></td>
+              <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
+                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
+                  {formatDate(item.issuance_date)}
+                  <EncodedNote transactionDate={item.issuance_date} createdAt={item.created_at} />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">{item.category}</span>
+                    {reversedIds?.has(item.id) && <ReversedBadge />}
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-slate-800 font-medium">
                   {item.issued_to}
                   {item.trucks?.plate_number && <p className="text-xs text-slate-400 font-mono">{item.trucks.plate_number}</p>}
@@ -1372,7 +1757,7 @@ function IssuancesTable({ rows, compact = false }: { rows: FuelIssuanceWithTarge
   );
 }
 
-function HistoryTable({ rows, canAdjust, onReverse, saving }: { rows: FuelInventoryLedger[]; canAdjust: boolean; onReverse: (item: FuelInventoryLedger) => void; saving: boolean }) {
+function HistoryTable({ rows, reversedLedgerIds, showEncoded = false, canAdjust, onReverse, saving }: { rows: FuelInventoryLedger[]; reversedLedgerIds: Set<string>; showEncoded?: boolean; canAdjust: boolean; onReverse: (item: FuelInventoryLedger) => void; saving: boolean }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -1392,8 +1777,11 @@ function HistoryTable({ rows, canAdjust, onReverse, saving }: { rows: FuelInvent
             {rows.length === 0 ? (
               <tr><td colSpan={canAdjust ? 7 : 6} className="px-4 py-12 text-center text-slate-400">No inventory movement found</td></tr>
             ) : rows.map(item => (
-              <tr key={item.id} className="hover:bg-slate-50">
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(item.movement_date)}</td>
+              <tr key={item.id} className={`hover:bg-slate-50 ${reversedLedgerIds.has(item.id) ? 'opacity-60' : ''}`}>
+                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
+                  {formatDate(item.movement_date)}
+                  <EncodedNote transactionDate={item.movement_date} createdAt={item.created_at} always={showEncoded} />
+                </td>
                 <td className="px-4 py-3"><span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-semibold ${movementBadge(item.movement_type)}`}>{item.movement_type.replace('_', ' ')}</span></td>
                 <td className="px-4 py-3 text-slate-800 font-medium">
                   {item.description || '—'}
@@ -1401,10 +1789,15 @@ function HistoryTable({ rows, canAdjust, onReverse, saving }: { rows: FuelInvent
                 </td>
                 <td className={`px-4 py-3 text-right font-semibold tabular-nums ${item.liters_delta >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>{fmt(item.liters_delta)} L</td>
                 <td className={`px-4 py-3 text-right tabular-nums ${item.value_delta >= 0 ? 'text-slate-700' : 'text-orange-600'}`}>{currency(item.value_delta)}</td>
-                <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{fmt(item.balance_liters_after)} L</td>
+                <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums whitespace-nowrap">
+                  {fmt(item.balance_liters_after)} L
+                  <p className="text-[11px] font-normal text-slate-400">from {fmt(Number(item.balance_liters_after) - Number(item.liters_delta))} L</p>
+                </td>
                 {canAdjust && (
                   <td className="px-4 py-3 text-center">
-                    {item.movement_type !== 'REVERSAL' && !item.reversal_of_ledger_id ? (
+                    {reversedLedgerIds.has(item.id) ? (
+                      <ReversedBadge />
+                    ) : item.movement_type !== 'REVERSAL' && !item.reversal_of_ledger_id ? (
                       <button disabled={saving} onClick={() => onReverse(item)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold disabled:opacity-60">
                         Reverse
                       </button>

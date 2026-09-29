@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, X, Loader2, CheckCircle, Droplet } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, loadErrorMessage } from '../lib/dbErrors';
+import { todayBusinessDate } from '../lib/date';
 import type { ExpenseCategory, ExpenseWithCategory } from '../lib/database.types';
 
 interface ExpenseFormProps {
@@ -18,23 +20,26 @@ interface FormData {
   expense_date: string;
 }
 
-const EMPTY_FORM: FormData = {
-  amount: '',
-  category_id: '',
-  payee_supplier: '',
-  description: '',
-  liters_counter: '',
-  expense_date: new Date().toISOString().split('T')[0],
-};
+function emptyForm(): FormData {
+  return {
+    amount: '',
+    category_id: '',
+    payee_supplier: '',
+    description: '',
+    liters_counter: '',
+    expense_date: todayBusinessDate(),
+  };
+}
 
 export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: ExpenseFormProps) {
-  const [form, setForm] = useState<FormData>(EMPTY_FORM);
+  const [form, setForm] = useState<FormData>(emptyForm);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [categoryError, setCategoryError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
 
   useEffect(() => {
@@ -43,7 +48,7 @@ export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: Expens
 
   useEffect(() => {
     if (!expense) {
-      setForm(EMPTY_FORM);
+      setForm(emptyForm());
       setSaved(false);
       setErrors({});
       return;
@@ -55,17 +60,18 @@ export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: Expens
       payee_supplier: expense.payee_supplier ?? '',
       description: expense.description ?? '',
       liters_counter: expense.liters_counter == null ? '' : String(expense.liters_counter),
-      expense_date: expense.expense_date ?? EMPTY_FORM.expense_date,
+      expense_date: expense.expense_date ?? todayBusinessDate(),
     });
     setSaved(false);
     setErrors({});
   }, [expense]);
 
   async function fetchCategories() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('expense_categories')
       .select('*')
       .order('order', { ascending: true });
+    if (error) setSaveError(loadErrorMessage('expense categories', error));
     const categoriesData = (data ?? []) as ExpenseCategory[];
     setCategories(categoriesData);
     if (categoriesData.length > 0 && !form.category_id) {
@@ -108,51 +114,64 @@ export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: Expens
     }
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleSubmitInFlight = useRef(false);
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errs: Partial<Record<keyof FormData, string>> = {};
+    if (handleSubmitInFlight.current) return;
+    handleSubmitInFlight.current = true;
+    try {
+      const errs: Partial<Record<keyof FormData, string>> = {};
 
-    if (!form.amount || parseFloat(form.amount) <= 0) errs.amount = 'Amount required';
-    if (!form.category_id) errs.category_id = 'Category required';
-    if (!form.payee_supplier.trim()) errs.payee_supplier = 'Payee required';
+      if (!form.amount || parseFloat(form.amount) <= 0) errs.amount = 'Amount required';
+      if (!form.category_id) errs.category_id = 'Category required';
+      if (!form.payee_supplier.trim()) errs.payee_supplier = 'Payee required';
 
-    const selectedCat = categories.find(c => c.id === form.category_id);
-    if (selectedCat?.name === 'Diesel' && (!form.liters_counter || parseFloat(form.liters_counter) <= 0)) {
-      errs.liters_counter = 'Liters required for Diesel';
-    }
+      const selectedCat = categories.find(c => c.id === form.category_id);
+      if (selectedCat?.name === 'Diesel' && (!form.liters_counter || parseFloat(form.liters_counter) <= 0)) {
+        errs.liters_counter = 'Liters required for Diesel';
+      }
 
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
-      return;
-    }
+      if (Object.keys(errs).length > 0) {
+        setErrors(errs);
+        return;
+      }
 
-    setSaving(true);
-    const payload = {
-      expense_date: form.expense_date,
-      category_id: form.category_id,
-      amount: parseFloat(form.amount),
-      payee_supplier: form.payee_supplier.trim(),
-      description: form.description,
-      liters_counter: selectedCat?.name === 'Diesel' ? parseFloat(form.liters_counter) : null,
-    };
+      setSaving(true);
+      const payload = {
+        expense_date: form.expense_date,
+        category_id: form.category_id,
+        amount: parseFloat(form.amount),
+        payee_supplier: form.payee_supplier.trim(),
+        description: form.description,
+        liters_counter: selectedCat?.name === 'Diesel' ? parseFloat(form.liters_counter) : null,
+      };
 
-    const { error } = expense
-      ? await supabase.from('expenses').update(payload).eq('id', expense.id)
-      : await supabase.from('expenses').insert(payload);
+      setSaveError('');
+      const { data: savedRows, error } = expense
+        ? await supabase.from('expenses').update(payload).eq('id', expense.id).select('id')
+        : await supabase.from('expenses').insert(payload).select('id');
 
-    setSaving(false);
-    if (!error) {
-      setSaved(true);
-      setTimeout(() => {
-        onSuccess();
-        setSaved(false);
-        if (!expense) {
-          setForm(EMPTY_FORM);
-        }
-        if (!expense && categories.length > 0) {
-          setForm(f => ({ ...f, category_id: categories[0].id }));
-        }
-      }, 800);
+      setSaving(false);
+      if (error || !savedRows?.length) {
+        setSaveError(friendlyDbError(error));
+        return;
+      }
+      if (!error) {
+        setSaved(true);
+        setTimeout(() => {
+          onSuccess();
+          setSaved(false);
+          if (!expense) {
+            setForm(emptyForm());
+          }
+          if (!expense && categories.length > 0) {
+            setForm(f => ({ ...f, category_id: categories[0].id }));
+          }
+        }, 800);
+      }
+    } finally {
+      handleSubmitInFlight.current = false;
     }
   }
 
@@ -341,6 +360,10 @@ export default function ExpenseForm({ onSuccess, expense, onCancelEdit }: Expens
             className="w-full px-4 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400"
           />
         </div>
+
+        {saveError && (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{saveError}</p>
+        )}
 
         {/* Submit */}
         <button

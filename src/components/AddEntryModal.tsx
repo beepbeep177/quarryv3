@@ -1,6 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Wallet, Clock3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, isNetworkError, loadErrorMessage, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
+import { fetchAllPages } from '../lib/fetchAll';
 import type { Customer, CustomerCreditEntry, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
 import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
 
@@ -201,10 +203,26 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
 
   useEffect(() => {
     Promise.all([
-      supabase.from('customers').select('*').order('name'),
-      supabase.from('pricing').select('*').order('material_type'),
-      supabase.from('customer_credit_entries').select('customer_id, debit_amount, credit_amount, status').eq('status', 'ACTIVE'),
+      fetchAllPages<Customer>(async (from, to) => {
+        const page = await supabase.from('customers').select('*').order('name').order('id').range(from, to);
+        return { data: page.data as Customer[] | null, error: page.error };
+      }),
+      fetchAllPages<Pricing>(async (from, to) => {
+        const page = await supabase.from('pricing').select('*').order('material_type').order('id').range(from, to);
+        return { data: page.data as Pricing[] | null, error: page.error };
+      }),
+      fetchAllPages<Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>>(async (from, to) => {
+        const page = await supabase
+          .from('customer_credit_entries')
+          .select('customer_id, debit_amount, credit_amount, status')
+          .eq('status', 'ACTIVE')
+          .order('id')
+          .range(from, to);
+        return { data: page.data as Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>[] | null, error: page.error };
+      }),
     ]).then(([c, p, creditEntries]) => {
+      const loadFailure = c.error ?? p.error ?? creditEntries.error;
+      if (loadFailure) setSaveError(loadErrorMessage('customers, pricing or credit balances', loadFailure));
       const customersData = (c.data ?? []) as Customer[];
       const pricingData = (p.data ?? []) as Pricing[];
       const creditRows = (creditEntries.data ?? []) as Pick<CustomerCreditEntry, 'customer_id' | 'debit_amount' | 'credit_amount' | 'status'>[];
@@ -562,101 +580,110 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     return uploadedPaths;
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const persistFormInFlight = useRef(false);
   async function persistForm() {
-    if (saving) return;
-
-    setSaving(true);
-    setSaveError(null);
-
+    if (persistFormInFlight.current) return;
+    persistFormInFlight.current = true;
     try {
-      const uploadedPaths = await uploadNewAttachments();
-      const attachmentUrls = canUploadAttachments
-        ? [...existingAttachmentUrls, ...uploadedPaths]
-        : (transaction?.attachment_urls ?? []);
+      if (saving) return;
 
-      if (isEditing) {
-        const p = form.products[0];
-        const splitDetails = form.payment_mode === 'SPLIT'
-          ? form.split_payment_details.map(detail => ({
-              mode: detail.mode,
-              amount: round2(Number(detail.amount) || 0),
-            }))
-          : [];
-        const payload = {
-          transaction_date: form.transaction_date,
-          customer_id: form.customer_id,
-          truck_id: form.truck_id,
-          dr_number: p.dr_number.trim(),
-          material_type: p.material_type || 'Crushed Stone',
-          length_cm: n(p.length_cm),
-          width_cm: n(p.width_cm),
-          height_cm: n(p.height_cm),
-          unit_price: isDonationMode ? 0 : n(p.unit_price),
-          dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
-          delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
-          passway: isDonationMode ? 0 : n(p.passway),
-          kulot: isDonationMode ? 0 : n(p.kulot),
-          payment_mode: form.payment_mode,
-          status: isDonationMode || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : form.status,
-          notes: form.notes,
-          attachment_urls: attachmentUrls,
-          split_payment_details: splitDetails,
-        };
-        const { error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id);
-        if (error) throw new Error(error.message || 'Failed to save. Please try again.');
-      } else {
-        const splitDetails = form.payment_mode === 'SPLIT'
-          ? form.split_payment_details.map(detail => ({
-              mode: detail.mode,
-              amount: round2(Number(detail.amount) || 0),
-            }))
-          : [];
-        const splitRatios = grandTotal > 0
-          ? splitDetails.map(detail => detail.amount / grandTotal)
-          : splitDetails.map(() => 0);
-        const rows = form.products.map(p => ({
-          transaction_date: form.transaction_date,
-          customer_id: form.customer_id,
-          truck_id: form.truck_id,
-          dr_number: p.dr_number.trim(),
-          material_type: p.material_type || 'Crushed Stone',
-          length_cm: n(p.length_cm),
-          width_cm: n(p.width_cm),
-          height_cm: n(p.height_cm),
-          unit_price: isDonationMode ? 0 : n(p.unit_price),
-          dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
-          delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
-          passway: isDonationMode ? 0 : n(p.passway),
-          kulot: isDonationMode ? 0 : n(p.kulot),
-          payment_mode: form.payment_mode,
-          status: (isDonationMode || form.payment_mode === 'CASH' || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : 'PENDING') as TransactionStatus,
-          notes: form.notes,
-          attachment_urls: attachmentUrls,
-          split_payment_details: form.payment_mode === 'SPLIT'
-            ? (() => {
-                const rowTotal = productTotal(p);
-                let allocated = 0;
-                return splitDetails.map((detail, index) => {
-                  const amount = index === splitDetails.length - 1
-                    ? round2(rowTotal - allocated)
-                    : round2(rowTotal * splitRatios[index]);
-                  allocated = round2(allocated + amount);
-                  return { mode: detail.mode, amount };
-                });
-              })()
-            : [],
-        }));
-        const { error } = await supabase.from('transactions').insert(rows);
-        if (error) throw new Error(error.message || 'Failed to save. Please try again.');
+      setSaving(true);
+      setSaveError(null);
+
+      try {
+        const uploadedPaths = await uploadNewAttachments();
+        const attachmentUrls = canUploadAttachments
+          ? [...existingAttachmentUrls, ...uploadedPaths]
+          : (transaction?.attachment_urls ?? []);
+
+        if (isEditing) {
+          const p = form.products[0];
+          const splitDetails = form.payment_mode === 'SPLIT'
+            ? form.split_payment_details.map(detail => ({
+                mode: detail.mode,
+                amount: round2(Number(detail.amount) || 0),
+              }))
+            : [];
+          const payload = {
+            transaction_date: form.transaction_date,
+            customer_id: form.customer_id,
+            truck_id: form.truck_id,
+            dr_number: p.dr_number.trim(),
+            material_type: p.material_type || 'Crushed Stone',
+            length_cm: n(p.length_cm),
+            width_cm: n(p.width_cm),
+            height_cm: n(p.height_cm),
+            unit_price: isDonationMode ? 0 : n(p.unit_price),
+            dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+            delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
+            passway: isDonationMode ? 0 : n(p.passway),
+            kulot: isDonationMode ? 0 : n(p.kulot),
+            payment_mode: form.payment_mode,
+            status: isDonationMode || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : form.status,
+            notes: form.notes,
+            attachment_urls: attachmentUrls,
+            split_payment_details: splitDetails,
+          };
+          const { data: updatedRows, error } = await supabase.from('transactions').update(payload).eq('id', transaction!.id).select('id');
+          if (error) throw new Error(friendlyDbError(error));
+          if (!updatedRows?.length) throw new Error(NOT_SAVED_MESSAGE);
+        } else {
+          const splitDetails = form.payment_mode === 'SPLIT'
+            ? form.split_payment_details.map(detail => ({
+                mode: detail.mode,
+                amount: round2(Number(detail.amount) || 0),
+              }))
+            : [];
+          const splitRatios = grandTotal > 0
+            ? splitDetails.map(detail => detail.amount / grandTotal)
+            : splitDetails.map(() => 0);
+          const rows = form.products.map(p => ({
+            transaction_date: form.transaction_date,
+            customer_id: form.customer_id,
+            truck_id: form.truck_id,
+            dr_number: p.dr_number.trim(),
+            material_type: p.material_type || 'Crushed Stone',
+            length_cm: n(p.length_cm),
+            width_cm: n(p.width_cm),
+            height_cm: n(p.height_cm),
+            unit_price: isDonationMode ? 0 : n(p.unit_price),
+            dr_capitol: isDonationMode ? 0 : n(p.dr_capitol),
+            delivery_fee: isDonationMode ? 0 : n(p.delivery_fee),
+            passway: isDonationMode ? 0 : n(p.passway),
+            kulot: isDonationMode ? 0 : n(p.kulot),
+            payment_mode: form.payment_mode,
+            status: (isDonationMode || form.payment_mode === 'CASH' || form.payment_mode === 'CUSTOMER_CREDIT' ? 'PAID' : 'PENDING') as TransactionStatus,
+            notes: form.notes,
+            attachment_urls: attachmentUrls,
+            split_payment_details: form.payment_mode === 'SPLIT'
+              ? (() => {
+                  const rowTotal = productTotal(p);
+                  let allocated = 0;
+                  return splitDetails.map((detail, index) => {
+                    const amount = index === splitDetails.length - 1
+                      ? round2(rowTotal - allocated)
+                      : round2(rowTotal * splitRatios[index]);
+                    allocated = round2(allocated + amount);
+                    return { mode: detail.mode, amount };
+                  });
+                })()
+              : [],
+          }));
+          const { error } = await supabase.from('transactions').insert(rows);
+          if (error) throw new Error(friendlyDbError(error));
+        }
+
+        setSaved(true);
+        setTimeout(() => { onSuccess(); onClose(); }, 900);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to save. Please try again.';
+        setSaveError(isNetworkError({ message }) ? friendlyDbError({ message }) : message);
+      } finally {
+        setSaving(false);
       }
-
-      setSaved(true);
-      setTimeout(() => { onSuccess(); onClose(); }, 900);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save. Please try again.';
-      setSaveError(message);
     } finally {
-      setSaving(false);
+      persistFormInFlight.current = false;
     }
   }
 

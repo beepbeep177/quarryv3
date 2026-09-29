@@ -19,6 +19,7 @@ import OperationsDashboard from './components/OperationsDashboard';
 import Reports from './components/Reports';
 import AccessControl from './components/AccessControl';
 import AuthPage from './pages/AuthPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { useAuth } from './contexts/AuthContext';
 import type { NavSection } from './types';
 import type { TransactionWithRelations } from './lib/database.types';
@@ -148,9 +149,6 @@ export default function App() {
     if (!editingTransaction) {
       setActiveSection('daily-view');
     }
-    if (!editingTransaction) {
-      setActiveSection('daily-view');
-    }
   }
 
   async function handleSignOut() {
@@ -189,6 +187,7 @@ export default function App() {
 
         <div className="flex-1 overflow-auto">
           <div className="max-w-7xl mx-auto px-6 py-7">
+            <ErrorBoundary key={activeSection}>
             {activeSection === 'dashboard' && (
               <Dashboard
                 onNavigate={handleNavigate}
@@ -228,6 +227,12 @@ export default function App() {
                   quarrySite: canViewSection['operations-quarry-site'],
                   wobbler: canViewSection['operations-wobbler'],
                 }}
+                canMarkNoOperation={{
+                  stoneCrusher: can('SC_OPERATIONS_ADD') || isManager,
+                  sandWashing: can('SW_OPERATIONS_ADD') || isManager,
+                  quarrySite: can('QS_OPERATIONS_ADD') || isManager,
+                  wobbler: can('WB_OPERATIONS_ADD') || isManager,
+                }}
                 onNavigate={handleNavigate}
               />
             )}
@@ -237,17 +242,20 @@ export default function App() {
             {activeSection === 'operations-wobbler' && <WobblerOperations canAdd={can('WB_OPERATIONS_ADD') || isManager} canEdit={can('WB_OPERATIONS_EDIT') || isManager} canDelete={can('WB_OPERATIONS_DELETE') || isManager} canExport={can('WB_OPERATIONS_EXPORT') || isManager} />}
             {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} canExport={can('REPORTS_EXPORT') || isManager} canPrint={can('REPORTS_PRINT') || isManager} onEditTransaction={handleEditTransaction} />}
             {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
+            </ErrorBoundary>
           </div>
         </div>
       </main>
 
       {showAddModal && (
+        <ErrorBoundary area="the entry form">
         <AddEntryModal
           onClose={handleModalClose}
           onSuccess={handleAddSuccess}
           transaction={editingTransaction ?? undefined}
           canUploadAttachments={canUploadDailyLedger}
         />
+        </ErrorBoundary>
       )}
     </div>
   );

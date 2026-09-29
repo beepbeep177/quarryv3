@@ -11,6 +11,8 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAll';
+import { dateKeyToDisplayDate, useBusinessToday } from '../lib/date';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
@@ -27,8 +29,6 @@ interface DailyLedgerProps {
   canEdit: boolean;
   canDelete: boolean;
 }
-
-const today = new Date().toISOString().split('T')[0];
 
 function fmt(v: number) {
   return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -57,20 +57,31 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
   const [page, setPage] = useState(1);
   const [attachmentPreview, setAttachmentPreview] = useState<string[] | null>(null);
   const [attachmentPreviewLoading, setAttachmentPreviewLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const today = useBusinessToday();
   const canManage = canAdd || canEdit || canDelete;
 
-  useEffect(() => { fetchTransactions(); }, [refreshKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchTransactions(); }, [refreshKey, today]);
   useEffect(() => { setPage(1); }, [search, modeFilter, productFilter, refreshKey]);
 
   async function fetchTransactions() {
     setLoading(true);
-    const { data } = await supabase
-      .from('transactions')
-      .select('*, customers(*), trucks(*)')
-      .eq('transaction_date', today)
-      .order('transaction_time', { ascending: false })
-      .order('created_at', { ascending: false });
-    setTransactions((data ?? []) as TransactionWithRelations[]);
+    setLoadError('');
+    const { data, error } = await fetchAllPages<TransactionWithRelations>(async (from, to) => {
+      const page = await supabase
+        .from('transactions')
+        .select('*, customers(*), trucks(*)')
+        .eq('transaction_date', today)
+        .order('transaction_time', { ascending: false })
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to);
+      return { data: page.data as TransactionWithRelations[] | null, error: page.error };
+    });
+    if (error) setLoadError(`Could not load today's entries. The list may be incomplete. ${error.message}`);
+    setTransactions(data);
     setLoading(false);
   }
 
@@ -81,10 +92,23 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
     setDeletingId(deleteTarget.id);
-    await supabase.from('transactions').delete().eq('id', deleteTarget.id);
+    setDeleteError('');
+    // .select() returns the deleted rows: an empty result means the database refused
+    // the delete (no permission) even though no error was raised.
+    const { data, error } = await supabase.from('transactions').delete().eq('id', deleteTarget.id).select('id');
+    setDeletingId(null);
+    if (error || !data || data.length === 0) {
+      const reason = error?.message ?? '';
+      setDeleteError(
+        /foreign key|violates|restrict/i.test(reason)
+          ? `DR ${deleteTarget.dr_number} was not deleted because it already has a payment/settlement or linked record. Void the settlement first.`
+          : `DR ${deleteTarget.dr_number} was not deleted. ${reason || 'You may not have permission to delete this entry.'}`,
+      );
+      setDeleteTarget(null);
+      return;
+    }
     setTransactions(prev => prev.filter(t => t.id !== deleteTarget.id));
     setDeleteTarget(null);
-    setDeletingId(null);
   }
 
   async function handleOpenAttachments(attachments: string[]) {
@@ -136,7 +160,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Today's Ledger</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {dateKeyToDisplayDate(today).toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
         {canAdd && (
@@ -151,6 +175,18 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
       </div>
 
       {!canManage && <ReadOnlyNotice message="This user group can review daily transactions only." />}
+      {loadError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{loadError}</span>
+          <button type="button" onClick={() => void fetchTransactions()} className="shrink-0 font-semibold underline">Retry</button>
+        </div>
+      )}
+      {deleteError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{deleteError}</span>
+          <button type="button" onClick={() => setDeleteError('')} className="shrink-0 font-semibold">Dismiss</button>
+        </div>
+      )}
 
       <div className="flex gap-3 items-center flex-wrap">
         <div className="relative flex-1 min-w-48">

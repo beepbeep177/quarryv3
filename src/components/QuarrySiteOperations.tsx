@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   Banknote,
   CalendarDays,
@@ -15,11 +15,13 @@ import {
   Truck,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
 import type { QuarrySiteDailyEntry } from '../lib/database.types';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import NoOperationButton from './NoOperationButton';
 
 const PAGE_SIZE = 8;
 const BINDER_RATE = 450;
@@ -164,7 +166,7 @@ function entryToForm(entry: QuarrySiteDailyEntry): EntryForm {
 function statusForEntry(entry: QuarrySiteDailyEntry) {
   const hasTrips = entry.jafcor_binder_trips > 0 || entry.jafcor_boulder_trips > 0;
   const hasDiesel = entry.total_diesel_consumption_liters > 0 || entry.quarry_equipment_diesel_liters > 0;
-  if (!hasTrips && !hasDiesel && !entry.number_of_trucks && entry.number_of_equipment === 0) return 'No Work';
+  if (!hasTrips && !hasDiesel && !entry.number_of_trucks && entry.number_of_equipment === 0) return 'No Operation';
   if (!hasTrips && hasDiesel) return 'Diesel Only';
   return 'Completed';
 }
@@ -283,41 +285,51 @@ export default function QuarrySiteOperations({
   const currentPage = Math.min(page, totalPages);
   const pagedEntries = useMemo(() => paginate(filteredEntries, currentPage, PAGE_SIZE), [filteredEntries, currentPage]);
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleSubmitInFlight = useRef(false);
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (editingId && !canEdit) return;
-    if (!editingId && !canAdd) return;
+    if (handleSubmitInFlight.current) return;
+    handleSubmitInFlight.current = true;
+    try {
+      if (editingId && !canEdit) return;
+      if (!editingId && !canAdd) return;
 
-    setSaving(true);
-    setError('');
+      setSaving(true);
+      setError('');
 
-    const payload = {
-      entry_date: form.entry_date,
-      jafcor_binder_trips: preview.binderTrips,
-      jafcor_boulder_trips: preview.jafcorBoulderTrips,
-      zaffara_boulder_trips: 0,
-      number_of_trucks: form.number_of_trucks.trim(),
-      quarry_equipment_diesel_liters: preview.quarryDiesel,
-      total_diesel_consumption_liters: preview.totalDiesel,
-      number_of_equipment: preview.equipment,
-      notes: form.notes.trim(),
-    };
+      const payload = {
+        entry_date: form.entry_date,
+        jafcor_binder_trips: preview.binderTrips,
+        jafcor_boulder_trips: preview.jafcorBoulderTrips,
+        zaffara_boulder_trips: 0,
+        number_of_trucks: form.number_of_trucks.trim(),
+        quarry_equipment_diesel_liters: preview.quarryDiesel,
+        total_diesel_consumption_liters: preview.totalDiesel,
+        number_of_equipment: preview.equipment,
+        notes: form.notes.trim(),
+      };
 
-    const result = editingId
-      ? await supabase.from('quarry_site_daily_entries').update(payload).eq('id', editingId)
-      : await supabase.from('quarry_site_daily_entries').insert(payload);
+      const result = editingId
+        ? await supabase.from('quarry_site_daily_entries').update(payload).eq('id', editingId).select('id')
+        : await supabase.from('quarry_site_daily_entries').insert(payload).select('id');
 
-    if (result.error) {
-      setError(result.error.code === '23505'
-        ? 'There is already a Quarry Site entry for this date. Open that row to edit it.'
-        : result.error.message);
-    } else {
-      handleReset();
-      setSelectedMonth(monthStart(payload.entry_date));
-      await fetchData();
+      if (result.error) {
+        setError(result.error.code === '23505'
+          ? 'There is already a Quarry Site entry for this date. Open that row to edit it.'
+          : friendlyDbError(result.error));
+      } else if (!result.data?.length) {
+        setError(NOT_SAVED_MESSAGE);
+      } else {
+        handleReset();
+        setSelectedMonth(monthStart(payload.entry_date));
+        await fetchData();
+      }
+
+      setSaving(false);
+    } finally {
+      handleSubmitInFlight.current = false;
     }
-
-    setSaving(false);
   }
 
   function handleEdit(entry: QuarrySiteDailyEntry) {
@@ -341,13 +353,14 @@ export default function QuarrySiteOperations({
     setDeleting(true);
     setError('');
 
-    const { error: deleteError } = await supabase
+    const { data: deletedRows, error: deleteError } = await supabase
       .from('quarry_site_daily_entries')
       .delete()
-      .eq('id', deleteTarget.id);
+      .eq('id', deleteTarget.id)
+      .select('id');
 
-    if (deleteError) {
-      setError(deleteError.message);
+    if (deleteError || !deletedRows?.length) {
+      setError(friendlyDbError(deleteError));
       setDeleting(false);
       return;
     }
@@ -572,6 +585,20 @@ export default function QuarrySiteOperations({
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editingId ? 'Update Daily Input' : 'Save Daily Input'}
                 </button>
+              )}
+              {!editingId && canAdd && (
+                <NoOperationButton
+                  module="quarrySite"
+                  date={form.entry_date}
+                  onError={setError}
+                  onDone={async () => {
+                    const markedDate = form.entry_date;
+                    setError('');
+                    handleReset();
+                    setSelectedMonth(monthStart(markedDate));
+                    await fetchData();
+                  }}
+                />
               )}
               <button
                 type="button"

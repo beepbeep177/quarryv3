@@ -83,6 +83,6 @@ describe('getWobblerStatus', () => {
       dumps: 0,
       loaders: 0,
       breakdown: '',
-    })).toBe('No Work');
+    })).toBe('No Operation');
   });
 });

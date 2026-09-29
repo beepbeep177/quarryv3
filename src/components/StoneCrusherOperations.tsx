@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   CalendarDays,
   Download,
@@ -16,11 +16,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
 import type { StoneCrusherDailyEntry, StoneCrusherMonthlyTarget } from '../lib/database.types';
 import Pagination from './Pagination';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import NoOperationButton from './NoOperationButton';
+import TimeRangeInput from './TimeRangeInput';
 import { calculateStoneCrusherVolumes, deriveStoneCrusherRate } from '../lib/stoneCrusherOperations';
 
 const PAGE_SIZE = 8;
@@ -218,7 +221,7 @@ function entryToForm(entry: StoneCrusherDailyEntry): EntryForm {
 }
 
 function statusForEntry(entry: StoneCrusherDailyEntry) {
-  if (entry.operation_minutes === 0 && entry.total_dumps === 0) return 'No Work';
+  if (entry.operation_minutes === 0 && entry.total_dumps === 0) return 'No Operation';
   if (entry.downtime_minutes > 0 || (entry.breakdown && entry.breakdown.toLowerCase() !== 'no breakdown')) return 'With Downtime';
   return 'Completed';
 }
@@ -415,64 +418,74 @@ export default function StoneCrusherOperations({
     setSavingTarget(false);
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleSubmitInFlight = useRef(false);
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (editingId && !canEdit) return;
-    if (!editingId && !canAdd) return;
+    if (handleSubmitInFlight.current) return;
+    handleSubmitInFlight.current = true;
+    try {
+      if (editingId && !canEdit) return;
+      if (!editingId && !canAdd) return;
 
-    const outputRateFields = [
-      form.g1_output_rate_cbm_per_hour,
-      form.three_fourth_output_rate_cbm_per_hour,
-      form.s_three_fourth_output_rate_cbm_per_hour,
-      form.s1c_output_rate_cbm_per_hour,
-    ];
-    if (preview.operationMinutes > 0 && outputRateFields.some(value => value.trim() === '')) {
-      setError('Enter an output rate for every product. Use 0 when a product was not produced.');
-      return;
+      const outputRateFields = [
+        form.g1_output_rate_cbm_per_hour,
+        form.three_fourth_output_rate_cbm_per_hour,
+        form.s_three_fourth_output_rate_cbm_per_hour,
+        form.s1c_output_rate_cbm_per_hour,
+      ];
+      if (preview.operationMinutes > 0 && outputRateFields.some(value => value.trim() === '')) {
+        setError('Enter an output rate for every product. Use 0 when a product was not produced.');
+        return;
+      }
+
+      setSaving(true);
+      setError('');
+
+      const payload = {
+        entry_date: form.entry_date,
+        operation_minutes: preview.operationMinutes,
+        downtime_minutes: preview.downtimeMinutes,
+        time_schedule: form.time_schedule.trim(),
+        breakdown: form.breakdown.trim(),
+        monthly_target_id: target?.id ?? null,
+        jaw_1_dumps: parseWhole(form.jaw_1_dumps),
+        jaw_2_dumps: parseWhole(form.jaw_2_dumps),
+        g1_output_rate_cbm_per_hour: parseDecimal(form.g1_output_rate_cbm_per_hour),
+        three_fourth_output_rate_cbm_per_hour: parseDecimal(form.three_fourth_output_rate_cbm_per_hour),
+        s_three_fourth_output_rate_cbm_per_hour: parseDecimal(form.s_three_fourth_output_rate_cbm_per_hour),
+        s1c_output_rate_cbm_per_hour: parseDecimal(form.s1c_output_rate_cbm_per_hour),
+        genset_used: preview.gensetUsed,
+        genset_1_liters: form.genset_1_active ? parseDecimal(form.genset_1_liters) : 0,
+        genset_2_liters: form.genset_2_active ? parseDecimal(form.genset_2_liters) : 0,
+        genset_4_liters: form.genset_4_active ? parseDecimal(form.genset_4_liters) : 0,
+        water_pump_genset_liters: form.water_pump_active ? parseDecimal(form.water_pump_genset_liters) : 0,
+        genset_1_running_minutes: form.genset_1_active ? parseWhole(form.genset_1_running_minutes) : 0,
+        genset_2_running_minutes: form.genset_2_active ? parseWhole(form.genset_2_running_minutes) : 0,
+        genset_4_running_minutes: form.genset_4_active ? parseWhole(form.genset_4_running_minutes) : 0,
+        notes: form.notes.trim(),
+      };
+
+      const result = editingId
+        ? await supabase.from('stone_crusher_daily_entries').update(payload).eq('id', editingId).select('id')
+        : await supabase.from('stone_crusher_daily_entries').insert(payload).select('id');
+
+      if (result.error) {
+        setError(result.error.code === '23505'
+          ? 'There is already a Stone Crusher entry for this date. Open that row to edit it.'
+          : friendlyDbError(result.error));
+      } else if (!result.data?.length) {
+        setError(NOT_SAVED_MESSAGE);
+      } else {
+        handleReset();
+        setSelectedMonth(monthStart(payload.entry_date));
+        await fetchData();
+      }
+
+      setSaving(false);
+    } finally {
+      handleSubmitInFlight.current = false;
     }
-
-    setSaving(true);
-    setError('');
-
-    const payload = {
-      entry_date: form.entry_date,
-      operation_minutes: preview.operationMinutes,
-      downtime_minutes: preview.downtimeMinutes,
-      time_schedule: form.time_schedule.trim(),
-      breakdown: form.breakdown.trim(),
-      monthly_target_id: target?.id ?? null,
-      jaw_1_dumps: parseWhole(form.jaw_1_dumps),
-      jaw_2_dumps: parseWhole(form.jaw_2_dumps),
-      g1_output_rate_cbm_per_hour: parseDecimal(form.g1_output_rate_cbm_per_hour),
-      three_fourth_output_rate_cbm_per_hour: parseDecimal(form.three_fourth_output_rate_cbm_per_hour),
-      s_three_fourth_output_rate_cbm_per_hour: parseDecimal(form.s_three_fourth_output_rate_cbm_per_hour),
-      s1c_output_rate_cbm_per_hour: parseDecimal(form.s1c_output_rate_cbm_per_hour),
-      genset_used: preview.gensetUsed,
-      genset_1_liters: form.genset_1_active ? parseDecimal(form.genset_1_liters) : 0,
-      genset_2_liters: form.genset_2_active ? parseDecimal(form.genset_2_liters) : 0,
-      genset_4_liters: form.genset_4_active ? parseDecimal(form.genset_4_liters) : 0,
-      water_pump_genset_liters: form.water_pump_active ? parseDecimal(form.water_pump_genset_liters) : 0,
-      genset_1_running_minutes: form.genset_1_active ? parseWhole(form.genset_1_running_minutes) : 0,
-      genset_2_running_minutes: form.genset_2_active ? parseWhole(form.genset_2_running_minutes) : 0,
-      genset_4_running_minutes: form.genset_4_active ? parseWhole(form.genset_4_running_minutes) : 0,
-      notes: form.notes.trim(),
-    };
-
-    const result = editingId
-      ? await supabase.from('stone_crusher_daily_entries').update(payload).eq('id', editingId)
-      : await supabase.from('stone_crusher_daily_entries').insert(payload);
-
-    if (result.error) {
-      setError(result.error.code === '23505'
-        ? 'There is already a Stone Crusher entry for this date. Open that row to edit it.'
-        : result.error.message);
-    } else {
-      handleReset();
-      setSelectedMonth(monthStart(payload.entry_date));
-      await fetchData();
-    }
-
-    setSaving(false);
   }
 
   function handleEdit(entry: StoneCrusherDailyEntry) {
@@ -495,13 +508,14 @@ export default function StoneCrusherOperations({
     if (!canDelete || !deleteTarget) return;
     setDeleting(true);
     setError('');
-    const { error: deleteError } = await supabase
+    const { data: deletedRows, error: deleteError } = await supabase
       .from('stone_crusher_daily_entries')
       .delete()
-      .eq('id', deleteTarget.id);
+      .eq('id', deleteTarget.id)
+      .select('id');
 
-    if (deleteError) {
-      setError(deleteError.message);
+    if (deleteError || !deletedRows?.length) {
+      setError(friendlyDbError(deleteError));
       setDeleting(false);
       return;
     }
@@ -703,12 +717,10 @@ export default function StoneCrusherOperations({
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
               <Field label="Time Schedule">
-                <input
-                  type="text"
+                <TimeRangeInput
                   value={form.time_schedule}
-                  onChange={e => updateForm('time_schedule', e.target.value)}
-                  className="input"
-                  placeholder="ex. 8am-5pm"
+                  onChange={value => updateForm('time_schedule', value)}
+                  onUseHours={hours => updateForm('operation_minutes', String(hours))}
                 />
               </Field>
               <Field label="Breakdown / Reason">
@@ -880,6 +892,20 @@ export default function StoneCrusherOperations({
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editingId ? 'Update Daily Input' : 'Save Daily Input'}
                 </button>
+              )}
+              {!editingId && canAdd && (
+                <NoOperationButton
+                  module="stoneCrusher"
+                  date={form.entry_date}
+                  onError={setError}
+                  onDone={async () => {
+                    const markedDate = form.entry_date;
+                    setError('');
+                    handleReset();
+                    setSelectedMonth(monthStart(markedDate));
+                    await fetchData();
+                  }}
+                />
               )}
               <button
                 type="button"

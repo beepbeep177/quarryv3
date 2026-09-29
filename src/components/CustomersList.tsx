@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { UserPlus, Search, RefreshCw, Users, Building2, Phone, MapPin, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { friendlyDbError, loadErrorMessage, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
+import { fetchAllPages } from '../lib/fetchAll';
 import type { Customer } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
@@ -38,27 +40,43 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
 
   async function fetchCustomers() {
     setLoading(true);
-    const { data } = await supabase.from('customers').select('*').order('name');
+    const { data, error } = await fetchAllPages<Customer>(async (from, to) => {
+      const page = await supabase.from('customers').select('*').order('name').order('id').range(from, to);
+      return { data: page.data as Customer[] | null, error: page.error };
+    });
+    if (error) setSaveError(loadErrorMessage('customers', error));
     setCustomers((data ?? []) as Customer[]);
     setLoading(false);
   }
 
+  // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
+  const handleAddInFlight = useRef(false);
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    setSaveError('');
-    if (!form.name.trim()) { setErrors({ name: 'Required' }); return; }
-    setSaving(true);
-    const { data, error } = await supabase.from('customers').insert({ name: form.name.trim(), contact: form.contact, address: form.address }).select().maybeSingle();
-    setSaving(false);
-    if (error) {
-      setSaveError(error.message);
-      return;
-    }
-    if (data) {
-      setCustomers(prev => [...prev, data as Customer].sort((a, b) => a.name.localeCompare(b.name)));
-      setForm({ name: '', contact: '', address: '' });
-      setShowForm(false);
-      setErrors({});
+    if (handleAddInFlight.current) return;
+    handleAddInFlight.current = true;
+    try {
+      setSaveError('');
+      if (!form.name.trim()) { setErrors({ name: 'Required' }); return; }
+      setSaving(true);
+      const { data, error } = await supabase.from('customers').insert({ name: form.name.trim(), contact: form.contact, address: form.address }).select().maybeSingle();
+      setSaving(false);
+      if (error) {
+        setSaveError(friendlyDbError(error));
+        return;
+      }
+      if (!data) {
+        setSaveError(NOT_SAVED_MESSAGE);
+        return;
+      }
+      if (data) {
+        setCustomers(prev => [...prev, data as Customer].sort((a, b) => a.name.localeCompare(b.name)));
+        setForm({ name: '', contact: '', address: '' });
+        setShowForm(false);
+        setErrors({});
+      }
+    } finally {
+      handleAddInFlight.current = false;
     }
   }
 
@@ -86,7 +104,11 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
       .maybeSingle();
     setEditSaving(false);
     if (error) {
-      setSaveError(error.message);
+      setSaveError(friendlyDbError(error));
+      return;
+    }
+    if (!data) {
+      setSaveError(NOT_SAVED_MESSAGE);
       return;
     }
     if (data) {
@@ -106,9 +128,9 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
     if (!deleteTarget) return;
     setSaveError('');
     setDeletingId(deleteTarget.id);
-    const { error } = await supabase.from('customers').delete().eq('id', deleteTarget.id);
-    if (error) {
-      setSaveError(error.message);
+    const { data: deletedRows, error } = await supabase.from('customers').delete().eq('id', deleteTarget.id).select('id');
+    if (error || !deletedRows?.length) {
+      setSaveError(friendlyDbError(error));
       setDeletingId(null);
       return;
     }

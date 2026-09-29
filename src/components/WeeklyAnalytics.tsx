@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { TrendingDown, RefreshCw, Calendar, BarChart3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAll';
+import { addDaysToDateKey, dateKeyToDisplayDate, dayOfWeekForDateKey, todayBusinessDate } from '../lib/date';
 import type { ExpenseWithCategory } from '../lib/database.types';
 
 function fmt(v: number) {
@@ -8,18 +10,16 @@ function fmt(v: number) {
 }
 
 function getWeekRange() {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
+  const today = todayBusinessDate();
+  const dayOfWeek = dayOfWeekForDateKey(today);
+  const start = addDaysToDateKey(today, -(dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+  const end = addDaysToDateKey(start, 6);
 
   return {
-    start: monday.toISOString().split('T')[0],
-    end: sunday.toISOString().split('T')[0],
-    startDate: monday,
-    endDate: sunday,
+    start,
+    end,
+    startDate: dateKeyToDisplayDate(start),
+    endDate: dateKeyToDisplayDate(end),
   };
 }
 
@@ -45,12 +45,17 @@ export default function WeeklyAnalytics({ refreshKey }: WeeklyAnalyticsProps) {
 
   async function fetchWeeklyExpenses() {
     setLoading(true);
-    const { data } = await supabase
-      .from('expenses')
-      .select('*, expense_categories(*)')
-      .gte('expense_date', week.start)
-      .lte('expense_date', week.end)
-      .order('expense_date', { ascending: false });
+    const { data } = await fetchAllPages<ExpenseWithCategory>(async (from, to) => {
+      const page = await supabase
+        .from('expenses')
+        .select('*, expense_categories(*)')
+        .gte('expense_date', week.start)
+        .lte('expense_date', week.end)
+        .order('expense_date', { ascending: false })
+        .order('id')
+        .range(from, to);
+      return { data: page.data as ExpenseWithCategory[] | null, error: page.error };
+    });
     setExpenses((data ?? []) as ExpenseWithCategory[]);
     setLoading(false);
   }

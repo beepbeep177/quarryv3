@@ -62,6 +62,10 @@ function todayInput() {
   return todayBusinessDate();
 }
 
+// Fresh start (client request, Sep 30 2026): records before this date are hidden in Fuel Management.
+// They are NOT deleted, e.g. Hauler Offset issuances still count in the Hauler Offset Ledger.
+const FUEL_RECORDS_START = '2026-09-28';
+
 const MAX_BACKDATE_DAYS = 30;
 const REMARK_REQUIRED_AFTER_DAYS = 7;
 const MAX_PRICE_PER_LITER = 200;
@@ -359,19 +363,19 @@ export default function FuelManagement({
           return { data: page.data as FuelInventoryState[] | null, error: page.error };
         }),
         fetchAllPages<FuelPurchase>(async (from, to) => {
-          let query = supabase.from('fuel_purchases').select('*').order('purchase_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          let query = supabase.from('fuel_purchases').select('*').gte('purchase_date', FUEL_RECORDS_START).order('purchase_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
           if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
           const page = await query.range(from, to);
           return { data: page.data as FuelPurchase[] | null, error: page.error };
         }),
         fetchAllPages<FuelIssuanceWithTarget>(async (from, to) => {
-          let query = supabase.from('fuel_issuances').select('*, trucks(*), company_equipment(*)').order('issuance_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          let query = supabase.from('fuel_issuances').select('*, trucks(*), company_equipment(*)').gte('issuance_date', FUEL_RECORDS_START).order('issuance_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
           if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
           const page = await query.range(from, to);
           return { data: page.data as FuelIssuanceWithTarget[] | null, error: page.error };
         }),
         fetchAllPages<FuelInventoryLedger>(async (from, to) => {
-          let query = supabase.from('fuel_inventory_ledger').select('*').order('movement_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+          let query = supabase.from('fuel_inventory_ledger').select('*').gte('movement_date', FUEL_RECORDS_START).order('movement_date', { ascending: false }).order('created_at', { ascending: false }).order('id');
           if (selectedBranchId !== 'ALL') query = query.eq('branch_id', selectedBranchId);
           const page = await query.range(from, to);
           return { data: page.data as FuelInventoryLedger[] | null, error: page.error };

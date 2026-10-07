@@ -26,6 +26,8 @@ import ReadOnlyNotice from './ReadOnlyNotice';
 import ActionModal from './ActionModal';
 import { fetchAllPages } from '../lib/fetchAll';
 import { todayBusinessDate } from '../lib/date';
+import { isWithinRange, useDateRange } from '../lib/dateRange';
+import DateRangeFilter from './DateRangeFilter';
 
 const PAGE_SIZE = 8;
 const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
@@ -44,6 +46,8 @@ type FuelIssuanceWithTarget = FuelIssuance & {
 interface FuelManagementProps {
   canAddPurchase?: boolean;
   canIssue?: boolean;
+  canEditPurchase?: boolean;
+  canEditIssuance?: boolean;
   canAdjust?: boolean;
   canExport?: boolean;
   canManageEquipment?: boolean;
@@ -267,6 +271,8 @@ function DonutChart({ data }: { data: { label: string; value: number }[] }) {
 export default function FuelManagement({
   canAddPurchase = false,
   canIssue = false,
+  canEditPurchase = false,
+  canEditIssuance = false,
   canAdjust = false,
   canExport = false,
   canManageEquipment = false,
@@ -285,6 +291,8 @@ export default function FuelManagement({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const fuelDates = useDateRange();
+  const [issuanceCategoryFilter, setIssuanceCategoryFilter] = useState('ALL');
   const [purchasePage, setPurchasePage] = useState(1);
   const [issuancePage, setIssuancePage] = useState(1);
   const [equipmentPage, setEquipmentPage] = useState(1);
@@ -331,6 +339,8 @@ export default function FuelManagement({
   const [equipmentSaving, setEquipmentSaving] = useState(false);
   const [reverseTarget, setReverseTarget] = useState<FuelInventoryLedger | null>(null);
   const [reencodeAfterReverse, setReencodeAfterReverse] = useState(false);
+  const [editingPurchase, setEditingPurchase] = useState<FuelPurchase | null>(null);
+  const [editingIssuance, setEditingIssuance] = useState<FuelIssuanceWithTarget | null>(null);
   const [pendingSave, setPendingSave] = useState<{ kind: 'purchase' | 'issuance' | 'adjustment'; warnings: string[] } | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<CompanyEquipment | null>(null);
   const [infoModal, setInfoModal] = useState('');
@@ -435,30 +445,45 @@ export default function FuelManagement({
     setIssuancePage(1);
     setEquipmentPage(1);
     setHistoryPage(1);
-  }, [search, selectedBranchId, activeTab, ledgerOrder]);
+  }, [search, selectedBranchId, activeTab, ledgerOrder, fuelDates.from, fuelDates.to, issuanceCategoryFilter]);
 
   const filteredPurchases = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return purchases;
     return purchases.filter(item =>
-      item.supplier.toLowerCase().includes(q) ||
-      item.reference_no.toLowerCase().includes(q) ||
-      item.remarks.toLowerCase().includes(q)
+      isWithinRange(item.purchase_date, fuelDates.start, fuelDates.end) && (
+        !q ||
+        item.supplier.toLowerCase().includes(q) ||
+        item.reference_no.toLowerCase().includes(q) ||
+        item.remarks.toLowerCase().includes(q)
+      )
     );
-  }, [purchases, search]);
+  }, [fuelDates.end, fuelDates.start, purchases, search]);
 
   const filteredIssuances = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return issuances;
     return issuances.filter(item =>
+      isWithinRange(item.issuance_date, fuelDates.start, fuelDates.end) &&
+      (issuanceCategoryFilter === 'ALL' || item.category === issuanceCategoryFilter) && (
+      !q ||
       item.category.toLowerCase().includes(q) ||
       item.issued_to.toLowerCase().includes(q) ||
       item.reference_no.toLowerCase().includes(q) ||
       (item.trucks?.plate_number ?? '').toLowerCase().includes(q) ||
       (item.company_equipment?.name ?? '').toLowerCase().includes(q) ||
       (item.company_equipment?.plate_or_code ?? '').toLowerCase().includes(q)
-    );
-  }, [issuances, search]);
+    ));
+  }, [fuelDates.end, fuelDates.start, issuanceCategoryFilter, issuances, search]);
+
+  // Issuance categories with how many issuances each has in the current date range.
+  const issuanceCategoryOptions = useMemo(() => {
+    const counts = new Map<string, number>(issueCategories.map(category => [category, 0]));
+    issuances.forEach(item => {
+      if (isWithinRange(item.issuance_date, fuelDates.start, fuelDates.end)) {
+        counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
+      }
+    });
+    return [...counts.entries()];
+  }, [fuelDates.end, fuelDates.start, issuances]);
 
   const visibleCompanyEquipment = useMemo(() => {
     const scoped = companyEquipment.filter(item =>
@@ -481,15 +506,18 @@ export default function FuelManagement({
 
   const filteredLedger = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const rows = !q ? ledger : ledger.filter(item =>
-      item.movement_type.toLowerCase().includes(q) ||
-      item.reference_no.toLowerCase().includes(q) ||
-      item.description.toLowerCase().includes(q)
+    const rows = ledger.filter(item =>
+      isWithinRange(item.movement_date, fuelDates.start, fuelDates.end) && (
+        !q ||
+        item.movement_type.toLowerCase().includes(q) ||
+        item.reference_no.toLowerCase().includes(q) ||
+        item.description.toLowerCase().includes(q)
+      )
     );
     if (ledgerOrder === 'date') return rows;
     // Encoded order matches how the running balance was actually computed.
     return [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
-  }, [ledger, ledgerOrder, search]);
+  }, [fuelDates.end, fuelDates.start, ledger, ledgerOrder, search]);
 
   const backdatedLedgerCount = useMemo(
     () => filteredLedger.filter(item => isBackdated(item.movement_date, item.created_at)).length,
@@ -579,17 +607,79 @@ export default function FuelManagement({
     else await saveAdjustment();
   }
 
+  function emptyPurchaseForm() {
+    return { purchase_date: todayInput(), supplier: '', reference_no: '', liters: '', unit_cost: '', remarks: '', post_to_expenses: true };
+  }
+
+  function emptyIssuanceForm() {
+    return { issuance_date: todayInput(), category: issueCategories[0], issued_to: '', truck_id: '', company_equipment_id: '', reference_no: '', liters: '', remarks: '' };
+  }
+
+  function startEditPurchase(item: FuelPurchase) {
+    setError('');
+    setEditingPurchase(item);
+    setPurchaseForm({
+      purchase_date: item.purchase_date,
+      supplier: item.supplier,
+      reference_no: item.reference_no,
+      liters: String(item.liters),
+      unit_cost: String(item.unit_cost),
+      remarks: item.remarks,
+      post_to_expenses: Boolean(item.expense_id),
+    });
+    setActiveTab('purchases');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function cancelEditPurchase() {
+    setEditingPurchase(null);
+    setPurchaseForm(emptyPurchaseForm());
+  }
+
+  function startEditIssuance(item: FuelIssuanceWithTarget) {
+    setError('');
+    setEditingIssuance(item);
+    setIssuanceForm({
+      issuance_date: item.issuance_date,
+      category: item.category,
+      issued_to: item.issued_to,
+      truck_id: item.truck_id ?? '',
+      company_equipment_id: item.company_equipment_id ?? '',
+      reference_no: item.reference_no,
+      liters: String(item.liters),
+      remarks: item.remarks,
+    });
+    setActiveTab('issuances');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function cancelEditIssuance() {
+    setEditingIssuance(null);
+    setIssuanceForm(emptyIssuanceForm());
+  }
+
   function handlePurchaseSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!actionBranchId) return;
-    const dateCheck = checkEntryDate(purchaseForm.purchase_date, purchaseForm.remarks);
+    if (!actionBranchId && !editingPurchase) return;
+    // Edits of old records do not need the late-entry remark; future dates are still blocked.
+    const dateCheck = checkEntryDate(purchaseForm.purchase_date, editingPurchase ? null : purchaseForm.remarks);
     if (dateCheck.block) return runChecks('purchase', dateCheck);
     const liters = Number(purchaseForm.liters);
     const unitCost = Number(purchaseForm.unit_cost);
+    if (editingPurchase && liters < Number(editingPurchase.liters)) {
+      const editState = states.find(state => state.branch_id === editingPurchase.branch_id);
+      const available = Number(editState?.current_liters ?? 0);
+      const reduction = Number(editingPurchase.liters) - liters;
+      if (reduction > available) {
+        setError(`Cannot reduce this purchase by ${fmt(reduction)} L: only ${fmt(available)} L left in inventory (the rest was already issued).`);
+        return;
+      }
+    }
     const reference = purchaseForm.reference_no.trim().toLowerCase();
     const supplier = purchaseForm.supplier.trim().toLowerCase();
     const duplicate = purchases.find(item =>
-      item.branch_id === actionBranchId &&
+      item.id !== editingPurchase?.id &&
+      item.branch_id === (editingPurchase?.branch_id ?? actionBranchId) &&
       !reversal.reversedSourceIds.has(item.id) &&
       ((reference && item.reference_no.trim().toLowerCase() === reference) ||
         (item.supplier.trim().toLowerCase() === supplier && item.purchase_date === purchaseForm.purchase_date && Number(item.liters) === liters))
@@ -597,6 +687,9 @@ export default function FuelManagement({
     const warnings = [...dateCheck.warnings, ...checkUnitCost(unitCost, actionAverageCost)];
     if (duplicate) {
       warnings.push(`A similar purchase already exists: ${duplicate.supplier} ${duplicate.reference_no ? `(${duplicate.reference_no}) ` : ''}on ${formatDate(duplicate.purchase_date)}, ${fmt(Number(duplicate.liters))} L.`);
+    }
+    if (editingPurchase?.expense_id) {
+      warnings.push(`The linked Diesel expense will be updated to ${currency(Math.round(liters * unitCost * 100) / 100)}.`);
     }
     if (warnings.length > 0) warnings.push(`Total to be saved: ${currency(Math.round(liters * unitCost * 100) / 100)}.`);
     runChecks('purchase', { warnings });
@@ -608,6 +701,27 @@ export default function FuelManagement({
     if (savePurchaseInFlight.current) return;
     savePurchaseInFlight.current = true;
     try {
+      if (editingPurchase) {
+        setSaving(true);
+        setError('');
+        const { error: updateError } = await supabase.rpc('update_fuel_purchase', {
+          p_purchase_id: editingPurchase.id,
+          p_purchase_date: purchaseForm.purchase_date,
+          p_supplier: purchaseForm.supplier.trim(),
+          p_reference_no: purchaseForm.reference_no.trim(),
+          p_liters: Number(purchaseForm.liters),
+          p_unit_cost: Number(purchaseForm.unit_cost),
+          p_remarks: purchaseForm.remarks.trim(),
+        });
+        setSaving(false);
+        if (updateError) {
+          setError(updateError.message);
+          return;
+        }
+        cancelEditPurchase();
+        await fetchFuelData();
+        return;
+      }
       if (!actionBranchId) return;
       setSaving(true);
       setError('');
@@ -650,17 +764,22 @@ export default function FuelManagement({
 
   function handleIssuanceSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!actionBranchId) return;
-    const dateCheck = checkEntryDate(issuanceForm.issuance_date, issuanceForm.remarks);
+    if (!actionBranchId && !editingIssuance) return;
+    const dateCheck = checkEntryDate(issuanceForm.issuance_date, editingIssuance ? null : issuanceForm.remarks);
     if (dateCheck.block) return runChecks('issuance', dateCheck);
     const liters = Number(issuanceForm.liters);
-    const available = Number(actionState?.current_liters ?? 0);
-    if (liters > available) {
-      setError(`Not enough fuel in inventory. Available: ${fmt(available)} L. If a purchase is missing, encode the purchase first.`);
+    const issuanceState = editingIssuance ? states.find(state => state.branch_id === editingIssuance.branch_id) : actionState;
+    const available = Number(issuanceState?.current_liters ?? 0);
+    const extraLiters = editingIssuance ? liters - Number(editingIssuance.liters) : liters;
+    if (extraLiters > available) {
+      setError(`Not enough fuel in inventory${editingIssuance ? ` for the extra ${fmt(extraLiters)} L` : ''}. Available: ${fmt(available)} L. If a purchase is missing, encode the purchase first.`);
       return;
     }
     const warnings = [...dateCheck.warnings];
-    const laterPurchase = purchases.find(item =>
+    if (editingIssuance && editingIssuance.category === CATEGORY_HAULER_OFFSET) {
+      warnings.push("This is a Hauler Offset issuance. The hauler's statement in Accounts Ledger will change to match the edit.");
+    }
+    const laterPurchase = editingIssuance ? undefined : purchases.find(item =>
       item.branch_id === actionBranchId &&
       !reversal.reversedSourceIds.has(item.id) &&
       item.purchase_date > issuanceForm.issuance_date
@@ -670,7 +789,8 @@ export default function FuelManagement({
     }
     const issuedTo = issuanceForm.issued_to.trim().toLowerCase();
     const duplicate = issuances.find(item =>
-      item.branch_id === actionBranchId &&
+      item.id !== editingIssuance?.id &&
+      item.branch_id === (editingIssuance?.branch_id ?? actionBranchId) &&
       !reversal.reversedSourceIds.has(item.id) &&
       item.issuance_date === issuanceForm.issuance_date &&
       item.category === issuanceForm.category &&
@@ -690,7 +810,7 @@ export default function FuelManagement({
     if (saveIssuanceInFlight.current) return;
     saveIssuanceInFlight.current = true;
     try {
-      if (!actionBranchId) return;
+      if (!actionBranchId && !editingIssuance) return;
       if (issuanceForm.category === CATEGORY_HAULER_OFFSET && !issuanceForm.truck_id) {
         setError('Select a hauler truck before saving a Hauler Offset fuel issuance.');
         return;
@@ -701,6 +821,33 @@ export default function FuelManagement({
       }
       if (issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT && !issuanceForm.company_equipment_id) {
         setError('Select company equipment before saving this fuel issuance.');
+        return;
+      }
+      if (editingIssuance) {
+        setSaving(true);
+        setError('');
+        const { error: updateError } = await supabase.rpc('update_fuel_issuance', {
+          p_issuance_id: editingIssuance.id,
+          p_issuance_date: issuanceForm.issuance_date,
+          p_category: issuanceForm.category,
+          p_issued_to: issuanceForm.issued_to.trim(),
+          p_truck_id: issuanceForm.category === CATEGORY_HAULER_OFFSET || issuanceForm.category === CATEGORY_COMPANY_TRUCK
+            ? issuanceForm.truck_id || null
+            : null,
+          p_reference_no: issuanceForm.reference_no.trim(),
+          p_liters: Number(issuanceForm.liters),
+          p_remarks: issuanceForm.remarks.trim(),
+          p_company_equipment_id: issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT
+            ? issuanceForm.company_equipment_id || null
+            : null,
+        });
+        setSaving(false);
+        if (updateError) {
+          setError(updateError.message);
+          return;
+        }
+        cancelEditIssuance();
+        await fetchFuelData();
         return;
       }
       setSaving(true);
@@ -788,6 +935,8 @@ export default function FuelManagement({
   }
 
   function prefillFromReversed(item: FuelInventoryLedger) {
+    setEditingPurchase(null);
+    setEditingIssuance(null);
     if (item.movement_type === 'PURCHASE' && item.source_table === 'fuel_purchases') {
       const source = purchases.find(row => row.id === item.source_id);
       if (!source) return;
@@ -970,21 +1119,55 @@ export default function FuelManagement({
     await fetchFuelData();
   }
 
-  function exportRows() {
+  const usesDateFilter = activeTab === 'purchases' || activeTab === 'issuances' || activeTab === 'history';
+  const fuelFiltersActive = usesDateFilter && (fuelDates.active || search.trim() !== '' || (activeTab === 'issuances' && issuanceCategoryFilter !== 'ALL'));
+  const purchaseFilteredTotals = useMemo(() => filteredPurchases
+    .filter(item => !reversal.reversedSourceIds.has(item.id))
+    .reduce((sum, item) => ({ liters: sum.liters + Number(item.liters), amount: sum.amount + Number(item.total_amount) }), { liters: 0, amount: 0 }),
+  [filteredPurchases, reversal]);
+  const issuanceFilteredTotals = useMemo(() => filteredIssuances
+    .filter(item => !reversal.reversedSourceIds.has(item.id))
+    .reduce((sum, item) => ({ liters: sum.liters + Number(item.liters), amount: sum.amount + Number(item.total_value) }), { liters: 0, amount: 0 }),
+  [filteredIssuances, reversal]);
+
+  function exportFilterLines() {
+    if (!usesDateFilter) return [];
+    return [
+      `Dates: ${fuelDates.active ? fuelDates.label : 'All dates'}`,
+      ...(activeTab === 'issuances' ? [`Category: ${issuanceCategoryFilter === 'ALL' ? 'All categories' : issuanceCategoryFilter}`] : []),
+      ...(search.trim() ? [`Search: ${search.trim()}`] : []),
+    ];
+  }
+
+  function exportSlug() {
+    const parts = [
+      activeTab === 'issuances' && issuanceCategoryFilter !== 'ALL' ? issuanceCategoryFilter : '',
+      fuelDates.active ? `${fuelDates.start || 'start'}-to-${fuelDates.end || 'today'}` : '',
+    ].filter(Boolean).join('-');
+    return parts ? `-${parts.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : '';
+  }
+
+  function exportRows(): { title: string; filename: string; headers: string[]; rows: (string | number)[][] } {
     if (activeTab === 'purchases') {
       return {
         title: 'Fuel Purchases',
-        filename: 'fuel-purchases',
+        filename: `fuel-purchases${exportSlug()}`,
         headers: ['Date', 'Supplier', 'Reference', 'Liters', 'Unit Cost', 'Total', 'Status', 'Encoded At', 'Remarks'],
-        rows: filteredPurchases.map(item => [item.purchase_date, item.supplier, item.reference_no, fmt(item.liters), fmt(item.unit_cost), fmt(item.total_amount), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
+        rows: [
+          ...filteredPurchases.map(item => [item.purchase_date, item.supplier, item.reference_no, fmt(item.liters), fmt(item.unit_cost), fmt(item.total_amount), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
+          ['Total (excluding reversed)', '', '', fmt(purchaseFilteredTotals.liters), '', fmt(purchaseFilteredTotals.amount), '', '', ''],
+        ],
       };
     }
     if (activeTab === 'issuances') {
       return {
-        title: 'Fuel Issuances',
-        filename: 'fuel-issuances',
+        title: issuanceCategoryFilter === 'ALL' ? 'Fuel Issuances' : `Fuel Issuances - ${issuanceCategoryFilter}`,
+        filename: `fuel-issuances${exportSlug()}`,
         headers: ['Date', 'Category', 'Issued To', 'Truck', 'Equipment', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Status', 'Encoded At', 'Remarks'],
-        rows: filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
+        rows: [
+          ...filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
+          ['Total (excluding reversed)', '', '', '', '', '', fmt(issuanceFilteredTotals.liters), '', fmt(issuanceFilteredTotals.amount), '', '', ''],
+        ],
       };
     }
     if (activeTab === 'equipment') {
@@ -997,7 +1180,7 @@ export default function FuelManagement({
     }
     return {
       title: 'Fuel Inventory History',
-      filename: 'fuel-inventory-history',
+      filename: `fuel-inventory-history${exportSlug()}`,
       headers: ['Date', 'Encoded At', 'Type', 'Reference', 'Description', 'Liters Delta', 'Unit Cost', 'Value Delta', 'Balance Liters', 'Average Cost'],
       rows: filteredLedger.map(item => [item.movement_date, formatDateTime(item.created_at), item.movement_type, item.reference_no, item.description, fmt(item.liters_delta), fmt(item.unit_cost), fmt(item.value_delta), fmt(item.balance_liters_after), fmt(item.weighted_average_cost_after)]),
     };
@@ -1008,6 +1191,7 @@ export default function FuelManagement({
     const lines = [
       [report.title],
       [`Branch: ${selectedBranch?.name ?? 'All branches'}`],
+      ...exportFilterLines().map(line => [line]),
       [`Generated: ${new Date().toLocaleString('en-PH')}`],
       [],
       report.headers,
@@ -1045,6 +1229,7 @@ export default function FuelManagement({
           <h1>${htmlEscape(report.title)}</h1>
           <div class="meta">
             <div>Branch: ${htmlEscape(selectedBranch?.name ?? 'All branches')}</div>
+            ${exportFilterLines().map(line => `<div>${htmlEscape(line)}</div>`).join('')}
             <div>Generated: ${htmlEscape(new Date().toLocaleString('en-PH'))}</div>
           </div>
           <table>
@@ -1147,11 +1332,53 @@ export default function FuelManagement({
           </div>
           {canExport && (
             <div className="flex items-center gap-2">
+              {fuelFiltersActive && <span className="text-xs text-slate-500">Exports follow the filters</span>}
               <button onClick={exportCsv} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold">
                 <Download size={15} /> CSV
               </button>
               <button onClick={exportPdf} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold">
                 <FileText size={15} /> PDF
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {usesDateFilter && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <DateRangeFilter range={fuelDates} />
+            {activeTab === 'issuances' && (
+              <select
+                value={issuanceCategoryFilter}
+                onChange={e => setIssuanceCategoryFilter(e.target.value)}
+                aria-label="Filter by category"
+                className={`rounded-lg border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 ${
+                  issuanceCategoryFilter === 'ALL' ? 'border-slate-200 text-slate-600' : 'border-emerald-300 font-medium text-emerald-700'
+                }`}
+              >
+                <option value="ALL">All categories</option>
+                {issuanceCategoryOptions.map(([category, count]) => (
+                  <option key={category} value={category}>{category} ({count})</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {fuelFiltersActive && activeTab !== 'history' && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-4 py-2.5 text-sm">
+              <span className="text-slate-600">
+                {activeTab === 'purchases'
+                  ? <>{filteredPurchases.length} {filteredPurchases.length === 1 ? 'purchase' : 'purchases'} · <span className="font-bold text-slate-800">{fmt(purchaseFilteredTotals.liters)} L</span> · Total <span className="font-bold text-slate-800">{currency(purchaseFilteredTotals.amount)}</span></>
+                  : <>{filteredIssuances.length} {filteredIssuances.length === 1 ? 'issuance' : 'issuances'}{issuanceCategoryFilter !== 'ALL' && <> in <span className="font-semibold text-slate-800">{issuanceCategoryFilter}</span></>} · <span className="font-bold text-slate-800">{fmt(issuanceFilteredTotals.liters)} L</span> · Value <span className="font-bold text-slate-800">{currency(issuanceFilteredTotals.amount)}</span></>}
+                {fuelDates.active && <> · <span className="font-semibold text-slate-800">{fuelDates.label}</span></>}
+                <span className="text-slate-400"> (totals exclude reversed)</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => { fuelDates.applyPreset('ALL'); setIssuanceCategoryFilter('ALL'); setSearch(''); }}
+                className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+              >
+                Clear filters
               </button>
             </div>
           )}
@@ -1209,9 +1436,14 @@ export default function FuelManagement({
 
           {activeTab === 'purchases' && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {canAddPurchase && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
-                  <h2 className="font-semibold text-slate-800 mb-4">Add Fuel Purchase</h2>
+              {(canAddPurchase || editingPurchase) && (
+                <div className={`bg-white rounded-xl border p-5 h-fit ${editingPurchase ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'}`}>
+                  <h2 className="font-semibold text-slate-800 mb-4">{editingPurchase ? 'Edit Fuel Purchase' : 'Add Fuel Purchase'}</h2>
+                  {editingPurchase && (
+                    <p className="-mt-2 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Editing {editingPurchase.supplier} {editingPurchase.reference_no ? `(${editingPurchase.reference_no}) ` : ''}from {formatDate(editingPurchase.purchase_date)}. Inventory and the ledger are corrected automatically.
+                    </p>
+                  )}
                   <FormGuide tips={[
                     'Price / L is per liter (e.g. 92.70), not the receipt total.',
                     'Encode purchases before the issuances that used them, so stock and cost stay correct.',
@@ -1226,20 +1458,33 @@ export default function FuelManagement({
                       <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={purchaseForm.liters} onChange={e => setPurchaseForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
                       <Field label="Price / L"><input required type="number" min="0" step="0.01" value={purchaseForm.unit_cost} onChange={e => setPurchaseForm(f => ({ ...f, unit_cost: e.target.value }))} className={inputClass} /></Field>
                     </div>
-                    <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                      <input type="checkbox" checked={purchaseForm.post_to_expenses} onChange={e => setPurchaseForm(f => ({ ...f, post_to_expenses: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-emerald-500" />
-                      <span><span className="block font-semibold">Post to Expenses</span><span className="block text-xs text-slate-500">Creates the linked Diesel expense once.</span></span>
-                    </label>
+                    {editingPurchase ? (
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                        {editingPurchase.expense_id
+                          ? 'The linked Diesel expense will be updated to the new amount and date.'
+                          : 'Not posted to Expenses. Use "Post to Expenses" in the table after saving if needed.'}
+                      </p>
+                    ) : (
+                      <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+                        <input type="checkbox" checked={purchaseForm.post_to_expenses} onChange={e => setPurchaseForm(f => ({ ...f, post_to_expenses: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+                        <span><span className="block font-semibold">Post to Expenses</span><span className="block text-xs text-slate-500">Creates the linked Diesel expense once.</span></span>
+                      </label>
+                    )}
                     <Field label="Remarks"><textarea value={purchaseForm.remarks} onChange={e => setPurchaseForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
                     <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                      Save Purchase
+                      {saving ? <Loader2 size={15} className="animate-spin" /> : editingPurchase ? <Pencil size={15} /> : <Plus size={15} />}
+                      {editingPurchase ? 'Update Purchase' : 'Save Purchase'}
                     </button>
+                    {editingPurchase && (
+                      <button type="button" onClick={cancelEditPurchase} disabled={saving} className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-70">
+                        Cancel Edit
+                      </button>
+                    )}
                   </form>
                 </div>
               )}
-              <div className={canAddPurchase ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <PurchasesTable rows={pagedPurchases} reversedIds={reversal.reversedSourceIds} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} />
+              <div className={canAddPurchase || editingPurchase ? 'xl:col-span-2' : 'xl:col-span-3'}>
+                <PurchasesTable rows={pagedPurchases} reversedIds={reversal.reversedSourceIds} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} canEdit={canEditPurchase} editingId={editingPurchase?.id} onEdit={startEditPurchase} />
                 <Pagination page={purchaseCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredPurchases.length} onPageChange={setPurchasePage} />
               </div>
             </div>
@@ -1247,9 +1492,14 @@ export default function FuelManagement({
 
           {activeTab === 'issuances' && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {canIssue && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
-                  <h2 className="font-semibold text-slate-800 mb-4">Issue Fuel</h2>
+              {(canIssue || editingIssuance) && (
+                <div className={`bg-white rounded-xl border p-5 h-fit ${editingIssuance ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'}`}>
+                  <h2 className="font-semibold text-slate-800 mb-4">{editingIssuance ? 'Edit Fuel Issuance' : 'Issue Fuel'}</h2>
+                  {editingIssuance && (
+                    <p className="-mt-2 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Editing issuance to {editingIssuance.issued_to} ({fmt(Number(editingIssuance.liters))} L) from {formatDate(editingIssuance.issuance_date)}. Its cost stays at {currency(Number(editingIssuance.unit_cost_snapshot))}/L.
+                    </p>
+                  )}
                   <FormGuide tips={[
                     'Issuances use the current stock and average cost, even when backdated.',
                     'Encode the purchase first if the fuel came from a delivery not yet recorded.',
@@ -1304,14 +1554,19 @@ export default function FuelManagement({
                     <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={issuanceForm.liters} onChange={e => setIssuanceForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
                     <Field label="Remarks"><textarea value={issuanceForm.remarks} onChange={e => setIssuanceForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
                     <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {saving ? <Loader2 size={15} className="animate-spin" /> : <ClipboardList size={15} />}
-                      Issue Fuel
+                      {saving ? <Loader2 size={15} className="animate-spin" /> : editingIssuance ? <Pencil size={15} /> : <ClipboardList size={15} />}
+                      {editingIssuance ? 'Update Issuance' : 'Issue Fuel'}
                     </button>
+                    {editingIssuance && (
+                      <button type="button" onClick={cancelEditIssuance} disabled={saving} className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-70">
+                        Cancel Edit
+                      </button>
+                    )}
                   </form>
                 </div>
               )}
-              <div className={canIssue ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <IssuancesTable rows={pagedIssuances} reversedIds={reversal.reversedSourceIds} />
+              <div className={canIssue || editingIssuance ? 'xl:col-span-2' : 'xl:col-span-3'}>
+                <IssuancesTable rows={pagedIssuances} reversedIds={reversal.reversedSourceIds} canEdit={canEditIssuance} editingId={editingIssuance?.id} onEdit={startEditIssuance} />
                 <Pagination page={issuanceCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredIssuances.length} onPageChange={setIssuancePage} />
               </div>
             </div>
@@ -1549,7 +1804,22 @@ function RecentPurchases({ rows, reversedIds, onViewAll }: { rows: FuelPurchase[
   );
 }
 
-function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, saving = false, onPost }: { rows: FuelPurchase[]; reversedIds?: Set<string>; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void }) {
+function EditRowButton({ onClick, active }: { onClick: () => void; active: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Edit"
+      aria-label="Edit"
+      className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${active ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
+    >
+      <Pencil size={13} />
+    </button>
+  );
+}
+
+function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, saving = false, onPost, canEdit = false, editingId, onEdit }: { rows: FuelPurchase[]; reversedIds?: Set<string>; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void; canEdit?: boolean; editingId?: string; onEdit?: (purchase: FuelPurchase) => void }) {
+  const showEdit = canEdit && !compact && Boolean(onEdit);
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -1563,11 +1833,12 @@ function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, s
               <th className="px-4 py-3 text-right">Price / L</th>
               <th className="px-4 py-3 text-right">Total</th>
               <th className="px-4 py-3 text-center">Expense</th>
+              {showEdit && <th className="px-3 py-3"><span className="sr-only">Edit</span></th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
+              <tr><td colSpan={showEdit ? 8 : 7} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
             ) : rows.map(item => (
               <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
                 <td className="px-5 py-3 whitespace-nowrap text-slate-600">
@@ -1590,6 +1861,11 @@ function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, s
                     <span className="text-xs text-slate-400">Unposted</span>
                   )}
                 </td>
+                {showEdit && (
+                  <td className="px-3 py-3 text-center">
+                    {!reversedIds?.has(item.id) && <EditRowButton active={editingId === item.id} onClick={() => onEdit?.(item)} />}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -1712,7 +1988,8 @@ function EquipmentTable({
   );
 }
 
-function IssuancesTable({ rows, reversedIds, compact = false }: { rows: FuelIssuanceWithTarget[]; reversedIds?: Set<string>; compact?: boolean }) {
+function IssuancesTable({ rows, reversedIds, compact = false, canEdit = false, editingId, onEdit }: { rows: FuelIssuanceWithTarget[]; reversedIds?: Set<string>; compact?: boolean; canEdit?: boolean; editingId?: string; onEdit?: (issuance: FuelIssuanceWithTarget) => void }) {
+  const showEdit = canEdit && !compact && Boolean(onEdit);
   return (
     <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
       <div className="overflow-x-auto">
@@ -1726,11 +2003,12 @@ function IssuancesTable({ rows, reversedIds, compact = false }: { rows: FuelIssu
               <th className="px-4 py-3 text-right">Liters</th>
               <th className="px-4 py-3 text-right">Price / L</th>
               <th className="px-4 py-3 text-right">Value</th>
+              {showEdit && <th className="px-3 py-3"><span className="sr-only">Edit</span></th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No fuel issuances found</td></tr>
+              <tr><td colSpan={showEdit ? 8 : 7} className="px-4 py-12 text-center text-slate-400">No fuel issuances found</td></tr>
             ) : rows.map(item => (
               <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
                 <td className="px-5 py-3 whitespace-nowrap text-slate-600">
@@ -1752,6 +2030,11 @@ function IssuancesTable({ rows, reversedIds, compact = false }: { rows: FuelIssu
                 <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>
                 <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{currency(item.unit_cost_snapshot)}</td>
                 <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(item.total_value)}</td>
+                {showEdit && (
+                  <td className="px-3 py-3 text-center">
+                    {!reversedIds?.has(item.id) && <EditRowButton active={editingId === item.id} onClick={() => onEdit?.(item)} />}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -1801,6 +2084,8 @@ function HistoryTable({ rows, reversedLedgerIds, showEncoded = false, canAdjust,
                   <td className="px-4 py-3 text-center">
                     {reversedLedgerIds.has(item.id) ? (
                       <ReversedBadge />
+                    ) : item.source_table === 'fuel_purchase_edits' || item.source_table === 'fuel_issuance_edits' ? (
+                      <span className="text-xs text-slate-400" title="Edit correction. Reverse the original purchase/issuance instead.">Edit</span>
                     ) : item.movement_type !== 'REVERSAL' && !item.reversal_of_ledger_id ? (
                       <button disabled={saving} onClick={() => onReverse(item)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold disabled:opacity-60">
                         Reverse

@@ -35,6 +35,8 @@ export type ActivityCode =
   | 'FUEL_ADJUST'
   | 'FUEL_EXPORT'
   | 'FUEL_EQUIPMENT_MANAGE'
+  | 'FUEL_PURCHASE_EDIT'
+  | 'FUEL_ISSUANCE_EDIT'
   | 'HAULER_OFFSET_LEDGER_VIEW'
   | 'HAULER_OFFSET_LEDGER_ADD'
   | 'HAULER_OFFSET_LEDGER_EXPORT'
@@ -1659,6 +1661,32 @@ export type Database = {
           p_is_opening_balance?: boolean;
         };
         Returns: Database['public']['Tables']['fuel_inventory_ledger']['Row'];
+      };
+      update_fuel_purchase: {
+        Args: {
+          p_purchase_id: string;
+          p_purchase_date: string;
+          p_supplier: string;
+          p_reference_no: string;
+          p_liters: number;
+          p_unit_cost: number;
+          p_remarks?: string;
+        };
+        Returns: Database['public']['Tables']['fuel_purchases']['Row'];
+      };
+      update_fuel_issuance: {
+        Args: {
+          p_issuance_id: string;
+          p_issuance_date: string;
+          p_category: string;
+          p_issued_to: string;
+          p_truck_id: string | null;
+          p_reference_no: string;
+          p_liters: number;
+          p_remarks?: string;
+          p_company_equipment_id?: string | null;
+        };
+        Returns: Database['public']['Tables']['fuel_issuances']['Row'];
       };
       reverse_fuel_movement: {
         Args: {

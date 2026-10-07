@@ -21,7 +21,7 @@ import type { Customer, ExpenseWithCategory, PaymentMode, TransactionWithRelatio
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import { getPaymentModeAmount } from '../lib/payment';
-import ExpensesLedger from './ExpensesLedger';
+import ExpensesLedger, { type ExpenseLedgerFilterState } from './ExpensesLedger';
 import { fetchAllPages } from '../lib/fetchAll';
 import ActionModal from './ActionModal';
 
@@ -540,6 +540,8 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
   const [productsPage, setProductsPage] = useState(1);
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
+  // Filters chosen in the Expense Ledger below the summary; the Expense Summary export follows them.
+  const [expenseLedgerFilter, setExpenseLedgerFilter] = useState<ExpenseLedgerFilterState | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [customerLoading, setCustomerLoading] = useState(true);
@@ -964,6 +966,34 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
       };
     }
 
+    if (activeTab === 'expenses' && expenseLedgerFilter?.active) {
+      // Export only what the ledger filters show (category / dates / search), item by item.
+      const rows = expenseLedgerFilter.filtered;
+      const filteredTotal = rows.reduce((sum, expense) => sum + Number(expense.amount ?? 0), 0);
+      const filteredLiters = rows.reduce((sum, expense) => sum + Number(expense.liters_counter ?? 0), 0);
+      return {
+        title: expenseLedgerFilter.category ? `Expense Summary - ${expenseLedgerFilter.category}` : 'Expense Summary (Filtered)',
+        filename: `expense-summary-${expenseLedgerFilter.category ? `${slugify(expenseLedgerFilter.category)}-` : 'filtered-'}${slugify(range.label)}`,
+        filterLines: [
+          ...baseFilterLines,
+          `Category: ${expenseLedgerFilter.category ?? 'All categories'}`,
+          ...(expenseLedgerFilter.dateLabel ? [`Ledger dates: ${expenseLedgerFilter.dateLabel}`] : []),
+          ...(expenseLedgerFilter.search ? [`Search: ${expenseLedgerFilter.search}`] : []),
+          `Records: ${rows.length}`,
+        ],
+        headers: ['Date', 'Category', 'Payee / Supplier', 'Description', 'Liters', 'Amount'],
+        rows: rows.map(expense => [
+          formatDateLabel(expense.expense_date, { month: 'short', day: 'numeric', year: 'numeric' }),
+          expense.expense_categories?.name ?? 'Uncategorized',
+          expense.payee_supplier ?? '',
+          expense.description ?? '',
+          expense.liters_counter ? fmt(Number(expense.liters_counter)) : '',
+          fmt(Number(expense.amount ?? 0)),
+        ]),
+        totals: ['Total', '', '', '', filteredLiters ? fmt(filteredLiters) : '', fmt(filteredTotal)],
+      };
+    }
+
     if (activeTab === 'expenses') {
       return {
         title: 'Expense Summary',
@@ -1051,6 +1081,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
     customerTotalVolume,
     customerTransactions,
     expenseCategoryTotals,
+    expenseLedgerFilter,
     gcashTotal,
     grandDeliveryFees,
     grandExtraFees,
@@ -2035,6 +2066,7 @@ export default function Reports({ initialTab = 'sales', refreshKey = 0, canEditT
             expenses={expenses}
             loading={loading}
             onRefresh={fetchReportData}
+            onFilterChange={setExpenseLedgerFilter}
           />
         </>
       )}

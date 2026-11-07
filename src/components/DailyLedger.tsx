@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   RefreshCw,
   PlusCircle,
@@ -11,12 +11,12 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { fetchAllPages } from '../lib/fetchAll';
+import { EMPTY_LEDGER_PAGE, type DailyLedgerPage } from '../lib/listPages';
+import { useAsyncQuery, useDebouncedValue } from '../lib/useAsyncQuery';
 import { dateKeyToDisplayDate, useBusinessToday } from '../lib/date';
 import type { TransactionWithRelations, PaymentMode } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
-import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 10;
@@ -47,8 +47,6 @@ function formatTime(value?: string | null) {
 }
 
 export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAdd, canEdit, canDelete }: DailyLedgerProps) {
-  const [transactions, setTransactions] = useState<TransactionWithRelations[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modeFilter, setModeFilter] = useState<PaymentMode | 'ALL'>('ALL');
   const [productFilter, setProductFilter] = useState<string>('ALL');
@@ -57,33 +55,29 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
   const [page, setPage] = useState(1);
   const [attachmentPreview, setAttachmentPreview] = useState<string[] | null>(null);
   const [attachmentPreviewLoading, setAttachmentPreviewLoading] = useState(false);
-  const [loadError, setLoadError] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const today = useBusinessToday();
   const canManage = canAdd || canEdit || canDelete;
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchTransactions(); }, [refreshKey, today]);
-  useEffect(() => { setPage(1); }, [search, modeFilter, productFilter, refreshKey]);
-
-  async function fetchTransactions() {
-    setLoading(true);
-    setLoadError('');
-    const { data, error } = await fetchAllPages<TransactionWithRelations>(async (from, to) => {
-      const page = await supabase
-        .from('transactions')
-        .select('*, customers(*), trucks(*)')
-        .eq('transaction_date', today)
-        .order('transaction_time', { ascending: false })
-        .order('created_at', { ascending: false })
-        .order('id')
-        .range(from, to);
-      return { data: page.data as TransactionWithRelations[] | null, error: page.error };
-    });
-    if (error) setLoadError(`Could not load today's entries. The list may be incomplete. ${error.message}`);
-    setTransactions(data);
-    setLoading(false);
-  }
+  const debouncedSearch = useDebouncedValue(search);
+  const query = useCallback(async (signal: AbortSignal) => {
+    const { data, error } = await supabase.rpc('get_daily_ledger_page', {
+      p_date: today, p_search: debouncedSearch, p_payment_mode: modeFilter,
+      p_material_type: productFilter, p_page: page, p_page_size: PAGE_SIZE,
+    }).abortSignal(signal);
+    if (error) throw new Error(`Could not load today's entries. ${error.message}`);
+    if (!data) throw new Error('No ledger response was returned.');
+    return data as unknown as DailyLedgerPage;
+    // refreshKey invalidates the query after an entry is saved elsewhere.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today, debouncedSearch, modeFilter, productFilter, page, refreshKey]);
+  const { data: ledgerPage, loading: queryLoading, error: loadError, refresh: fetchTransactions } = useAsyncQuery(query, EMPTY_LEDGER_PAGE);
+  const loading = queryLoading || search !== debouncedSearch;
+  const pagedTransactions = ledgerPage.rows;
+  const availableProducts = ledgerPage.products;
+  const currentPage = ledgerPage.page;
+  const totalCount = ledgerPage.total_count;
+  const totals = { volume: ledgerPage.total_volume, amount: ledgerPage.total_amount };
 
   function handleDelete(transaction: TransactionWithRelations) {
     setDeleteTarget(transaction);
@@ -107,7 +101,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
       setDeleteTarget(null);
       return;
     }
-    setTransactions(prev => prev.filter(t => t.id !== deleteTarget.id));
+    fetchTransactions();
     setDeleteTarget(null);
   }
 
@@ -125,34 +119,6 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
     setAttachmentPreview(signedUrls.filter((url): url is string => !!url));
     setAttachmentPreviewLoading(false);
   }
-
-  const availableProducts = useMemo(() => {
-    const products = [...new Set(transactions.map(t => t.material_type).filter(Boolean))].sort();
-    return products;
-  }, [transactions]);
-
-  const filtered = transactions.filter(t => {
-    const q = search.toLowerCase();
-    const matchSearch =
-      !q ||
-      t.dr_number.toLowerCase().includes(q) ||
-      (t.customers?.name ?? '').toLowerCase().includes(q) ||
-      (t.trucks?.plate_number ?? '').toLowerCase().includes(q);
-    const matchMode = modeFilter === 'ALL' || t.payment_mode === modeFilter;
-    const matchProduct = productFilter === 'ALL' || t.material_type === productFilter;
-    return matchSearch && matchMode && matchProduct;
-  });
-
-  const totals = filtered.reduce(
-    (acc, t) => ({
-      volume: acc.volume + (t.volume_m3 ?? 0),
-      amount: acc.amount + (t.total_amount ?? 0),
-    }),
-    { volume: 0, amount: 0 }
-  );
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pagedTransactions = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
@@ -195,7 +161,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
             type="text"
             placeholder="Search DR#, customer, truck..."
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); setPage(1); }}
             className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 bg-white"
           />
         </div>
@@ -204,7 +170,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
           {(['ALL', 'CASH', 'P.O', 'OFFSET', 'GCASH', 'BANK_TRANSFER', 'CUSTOMER_CREDIT', 'DONATION', 'SPLIT'] as const).map(mode => (
             <button
               key={mode}
-              onClick={() => setModeFilter(mode)}
+              onClick={() => { setModeFilter(mode); setPage(1); }}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                 modeFilter === mode
                   ? mode === 'CASH' ? 'bg-emerald-500 text-white'
@@ -228,7 +194,7 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
             <span className="text-xs text-slate-400 font-medium">Product:</span>
             <select
               value={productFilter}
-              onChange={e => setProductFilter(e.target.value)}
+              onChange={e => { setProductFilter(e.target.value); setPage(1); }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400"
             >
               <option value="ALL">ALL</option>
@@ -250,7 +216,9 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
           <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
             <RefreshCw size={16} className="animate-spin" /> Loading transactions...
           </div>
-        ) : filtered.length === 0 ? (
+        ) : loadError ? (
+          <p className="px-4 py-12 text-center text-sm text-slate-500">Entries are unavailable. Use Retry above to load them again.</p>
+        ) : totalCount === 0 ? (
           <div className="py-16 text-center">
             <Layers size={32} className="text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm font-medium">No transactions found</p>
@@ -351,10 +319,10 @@ export default function DailyLedger({ onAddEntry, onEditEntry, refreshKey, canAd
                 </tbody>
               </table>
             </div>
-            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={totalCount} onPageChange={setPage} />
 
             <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-sm">
-              <span className="text-slate-400 font-medium">{filtered.length} entries</span>
+              <span className="text-slate-400 font-medium">{totalCount} entries</span>
               <div className="flex items-center gap-8">
                 <div className="text-right">
                   <p className="text-slate-500 text-xs">Total Volume</p>

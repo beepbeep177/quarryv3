@@ -1,0 +1,12 @@
+# Normalize line endings: the repository stores LF; Windows checkouts may use CRLF.
+# Prevents whole-file "changes" that are only CRLF vs LF differences.
+* text=auto
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.xlsx binary

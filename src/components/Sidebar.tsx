@@ -25,15 +25,34 @@ import {
   Cog,
   Search,
   X,
+  HardHat,
+  Contact,
+  Fingerprint,
+  Wallet,
+  HandCoins,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivityCode } from '../lib/database.types';
+import { isPlainNavigation, sectionHref } from '../lib/navigation';
 import type { NavSection } from '../types';
 
 interface SidebarProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection) => void;
   can: (activityCode: ActivityCode) => boolean;
+}
+
+function NavigationLink({ section, onNavigate, onClick, ...props }: Omit<React.ComponentProps<'a'>, 'href'> & {
+  section: NavSection;
+  onNavigate: (section: NavSection) => void;
+}) {
+  return <a {...props} href={sectionHref(section)} onClick={event => {
+    if (!isPlainNavigation(event)) return;
+    event.preventDefault();
+    onNavigate(section);
+    onClick?.(event);
+  }} />;
 }
 
 interface MenuItem {
@@ -43,7 +62,7 @@ interface MenuItem {
   children?: { id: NavSection; label: string; icon: React.ReactNode }[];
 }
 
-type SidebarCategoryId = 'sales' | 'operations';
+type SidebarCategoryId = 'sales' | 'operations' | 'workforce';
 
 interface MenuCategory {
   id: SidebarCategoryId;
@@ -72,6 +91,7 @@ const SEARCH_KEYWORDS: Partial<Record<NavSection, string>> = {
   expenses: 'expense gastos diesel payee supplier',
   'fuel-management': 'fuel diesel gas krudo purchase issuance inventory',
   'hauler-offset-ledger': 'accounts ledger hauler offset customer credit statement',
+  reconciliation: 'reconciliation reconcile daily close collections cash credit fuel discrepancy balance',
   reports: 'reports sales report export print',
   'access-control': 'access control users accounts permissions groups audit log',
   'operations-dashboard': 'operations dashboard production daily operations',
@@ -79,7 +99,18 @@ const SEARCH_KEYWORDS: Partial<Record<NavSection, string>> = {
   'operations-sand-washing': 'sand washing vibro waste',
   'operations-quarry-site': 'quarry site binder boulder trips',
   'operations-wobbler': 'wobbler dumps loaders',
+  'workforce-employees': 'employees employee masterlist workers staff payroll sahod sweldo biometrics rate',
+  'workforce-attendance': 'attendance biometrics dtr time in out punches timecard overtime ot night diff import pdf',
+  'workforce-payroll': 'payroll sahod sweldo salary payslip wages register',
+  'workforce-cash-advances': 'cash advance vale ca utang employees deduction',
+  'workforce-settings': 'workforce settings pay rules shifts holidays overtime night differential',
 };
+
+function getCategoryForSection(section: NavSection): SidebarCategoryId {
+  if (section.startsWith('operations')) return 'operations';
+  if (section.startsWith('workforce')) return 'workforce';
+  return 'sales';
+}
 
 function getOpenGroupForSection(section: NavSection) {
   if (section.startsWith('daily')) return 'daily-view';
@@ -175,6 +206,10 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
       );
     }
 
+    if (can('RECONCILIATION_VIEW') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'reconciliation', label: 'Daily Reconciliation', icon: <ReceiptText size={18} /> });
+    }
+
     if (can('REPORTS_VIEW')) {
       items.push(
         {
@@ -231,6 +266,26 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
     ];
   }, [can]);
 
+  const workforceItems = useMemo<MenuItem[]>(() => {
+    const items: MenuItem[] = [];
+    if (can('WF_EMPLOYEES_VIEW') || can('WF_EMPLOYEES_MANAGE') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'workforce-employees', label: 'Employees', icon: <Contact size={18} /> });
+    }
+    if (can('WF_ATTENDANCE_VIEW') || can('WF_ATTENDANCE_IMPORT') || can('WF_ATTENDANCE_ADJUST') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'workforce-attendance', label: 'Attendance', icon: <Fingerprint size={18} /> });
+    }
+    if (can('WF_PAYROLL_VIEW') || can('WF_PAYROLL_MANAGE') || can('WF_PAYROLL_LOCK') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'workforce-payroll', label: 'Payroll', icon: <Wallet size={18} /> });
+    }
+    if (can('WF_CASH_ADVANCE_VIEW') || can('WF_CASH_ADVANCE_MANAGE') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'workforce-cash-advances', label: 'Cash Advances', icon: <HandCoins size={18} /> });
+    }
+    if (can('WF_SETTINGS_MANAGE') || can('USER_GROUP_ACCESS_MANAGE')) {
+      items.push({ id: 'workforce-settings', label: 'Pay Rules & Holidays', icon: <SlidersHorizontal size={18} /> });
+    }
+    return items;
+  }, [can]);
+
   const menuCategories = useMemo<MenuCategory[]>(() => {
     const categories: MenuCategory[] = [
       {
@@ -245,17 +300,23 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
         icon: <Settings size={18} />,
         items: operationsItems,
       },
+      {
+        id: 'workforce',
+        label: 'Workforce',
+        icon: <HardHat size={18} />,
+        items: workforceItems,
+      },
     ];
 
     return categories.filter(category => category.items.length > 0);
-  }, [operationsItems, salesItems]);
+  }, [operationsItems, salesItems, workforceItems]);
 
   const flatMenuItems = useMemo(
     () => [...menuCategories.flatMap(category => category.items), ...standaloneItems],
     [menuCategories, standaloneItems],
   );
 
-  const [openCategory, setOpenCategory] = useState<SidebarCategoryId | null>(activeSection.startsWith('operations') ? 'operations' : 'sales');
+  const [openCategory, setOpenCategory] = useState<SidebarCategoryId | null>(getCategoryForSection(activeSection));
   const [openGroup, setOpenGroup] = useState<string | null>(() => getOpenGroupForSection(activeSection));
   const [collapsed, setCollapsed] = useState(false);
   const [query, setQuery] = useState('');
@@ -322,7 +383,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
 
   useEffect(() => {
     if (activeSection === 'access-control') return;
-    setOpenCategory(activeSection.startsWith('operations') ? 'operations' : 'sales');
+    setOpenCategory(getCategoryForSection(activeSection));
     setOpenGroup(getOpenGroupForSection(activeSection));
   }, [activeSection]);
 
@@ -360,9 +421,10 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
 
     if (!hasChildren) {
       return (
-        <button
+        <NavigationLink
+          section={item.id}
+          onNavigate={onNavigate}
           key={item.id}
-          onClick={() => onNavigate(item.id)}
           title={collapsed ? item.label : undefined}
           className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${nested ? 'py-2 rounded-md' : 'py-2.5 rounded-lg'} text-sm font-medium transition-colors ${
             activeSection === item.id
@@ -372,7 +434,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
         >
           <span className={activeSection === item.id ? 'text-emerald-400' : ''}>{item.icon}</span>
           {!collapsed && item.label}
-        </button>
+        </NavigationLink>
       );
     }
 
@@ -401,9 +463,8 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
         {isOpen && (
           <div className="ml-4 mt-0.5 space-y-0.5 pl-3 border-l border-slate-800">
             {item.children!.map(child => (
-              <button
+              <NavigationLink section={child.id} onNavigate={onNavigate}
                 key={child.id}
-                onClick={() => onNavigate(child.id)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
                   activeSection === child.id
                     ? 'bg-emerald-500/15 text-emerald-400 font-medium'
@@ -412,7 +473,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
               >
                 {child.icon}
                 {child.label}
-              </button>
+              </NavigationLink>
             ))}
           </div>
         )}
@@ -497,13 +558,12 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
           ) : (
             <div className="space-y-0.5" role="listbox" aria-label="Search results">
               {searchResults.map((entry, index) => (
-                <button
+                <NavigationLink section={entry.id} onNavigate={onNavigate}
                   key={`${entry.id}-${entry.path}`}
-                  type="button"
                   role="option"
                   aria-selected={index === highlighted}
                   onMouseEnter={() => setHighlighted(index)}
-                  onClick={() => openSearchResult(entry)}
+                  onClick={() => { setQuery(''); searchInputRef.current?.blur(); }}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
                     index === highlighted ? 'bg-slate-800/80 text-slate-100' : 'text-slate-400 hover:bg-slate-800/60'
                   }`}
@@ -513,7 +573,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
                     <span className="block truncate text-sm font-medium">{entry.label}</span>
                     <span className="block truncate text-[11px] text-slate-500">{entry.path}</span>
                   </span>
-                </button>
+                </NavigationLink>
               ))}
             </div>
           )
@@ -549,9 +609,8 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
           }).concat(standaloneItems.length > 0 ? [
             <div key="standalone" className="mt-2 space-y-0.5 border-t border-slate-800 pt-2">
               {standaloneItems.map(item => (
-                <button
+                <NavigationLink section={item.id} onNavigate={onNavigate}
                   key={item.id}
-                  onClick={() => onNavigate(item.id)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
                     activeSection === item.id
                       ? 'bg-slate-900 text-emerald-400'
@@ -560,7 +619,7 @@ export default function Sidebar({ activeSection, onNavigate, can }: SidebarProps
                 >
                   <span className={activeSection === item.id ? 'text-emerald-400' : 'text-slate-400'}>{item.icon}</span>
                   <span className="flex-1 text-left">{item.label}</span>
-                </button>
+                </NavigationLink>
               ))}
             </div>,
           ] : [])

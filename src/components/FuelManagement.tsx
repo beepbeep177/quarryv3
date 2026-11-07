@@ -1,272 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDownCircle,
-  ArrowUpCircle,
-  ClipboardList,
-  Database,
   Download,
   FileText,
   Fuel,
-  Info,
-  History,
-  Loader2,
-  Pencil,
-  Plus,
   RefreshCw,
-  Search,
-  Trash2,
-  Truck,
-  Wrench,
+  Search
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import type { CompanyEquipment, FuelBranch, FuelInventoryLedger, FuelInventoryState, FuelIssuance, FuelPurchase, Truck as TruckType } from '../lib/database.types';
-import Pagination from './Pagination';
-import { paginate } from '../lib/pagination';
-import ReadOnlyNotice from './ReadOnlyNotice';
-import ActionModal from './ActionModal';
-import { fetchAllPages } from '../lib/fetchAll';
-import { todayBusinessDate } from '../lib/date';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CompanyEquipment, FuelBranch, FuelInventoryLedger, FuelInventoryState, FuelPurchase, Truck as TruckType } from '../lib/database.types';
 import { isWithinRange, useDateRange } from '../lib/dateRange';
+import { fetchAllPages } from '../lib/fetchAll';
+import { paginate } from '../lib/pagination';
+import { supabase } from '../lib/supabase';
+import ActionModal from './ActionModal';
 import DateRangeFilter from './DateRangeFilter';
-
-const PAGE_SIZE = 8;
-const chartColors = ['#10b981', '#38bdf8', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
-const issueCategories = ['Hauler Offset', 'Company Equipment', 'Company Truck', 'Parts / Errand', 'Owner / Personal'];
-const equipmentTypes = ['Loader', 'Backhoe', 'Car', 'Service Vehicle', 'Generator', 'Other'];
-const CATEGORY_HAULER_OFFSET = 'Hauler Offset';
-const CATEGORY_COMPANY_EQUIPMENT = 'Company Equipment';
-const CATEGORY_COMPANY_TRUCK = 'Company Truck';
-
-type FuelTab = 'overview' | 'purchases' | 'issuances' | 'equipment' | 'history';
-type FuelIssuanceWithTarget = FuelIssuance & {
-  trucks?: TruckType | null;
-  company_equipment?: CompanyEquipment | null;
-};
-
-interface FuelManagementProps {
-  canAddPurchase?: boolean;
-  canIssue?: boolean;
-  canEditPurchase?: boolean;
-  canEditIssuance?: boolean;
-  canAdjust?: boolean;
-  canExport?: boolean;
-  canManageEquipment?: boolean;
-}
-
-interface EquipmentFormState {
-  branch_id: string;
-  name: string;
-  equipment_type: string;
-  plate_or_code: string;
-  operator_name: string;
-  notes: string;
-}
-
-function todayInput() {
-  return todayBusinessDate();
-}
-
-// Fresh start (client request, Sep 30 2026): records before this date are hidden in Fuel Management.
-// They are NOT deleted, e.g. Hauler Offset issuances still count in the Hauler Offset Ledger.
-const FUEL_RECORDS_START = '2026-09-28';
-
-const MAX_BACKDATE_DAYS = 30;
-const REMARK_REQUIRED_AFTER_DAYS = 7;
-const MAX_PRICE_PER_LITER = 200;
-const PRICE_DEVIATION_LIMIT = 0.3;
-
-function daysBetween(fromDate: string, toDate: string) {
-  return Math.round((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / 86400000);
-}
-
-type EntryCheck = { block?: string; warnings: string[] };
-
-function checkEntryDate(date: string, remarks: string | null): EntryCheck {
-  const today = todayInput();
-  if (!date) return { block: 'Enter a date.', warnings: [] };
-  if (date > today) return { block: 'The date cannot be in the future.', warnings: [] };
-  const age = daysBetween(date, today);
-  if (remarks !== null && age > REMARK_REQUIRED_AFTER_DAYS && !remarks.trim()) {
-    return { block: `This entry is ${age} days old. Add a remark explaining the late entry (e.g. "from logbook").`, warnings: [] };
-  }
-  return { warnings: age > MAX_BACKDATE_DAYS ? [`The date is ${age} days ago. Make sure the month and year are correct.`] : [] };
-}
-
-function checkUnitCost(unitCost: number, averageCost: number): string[] {
-  if (!(unitCost > 0)) return [];
-  if (unitCost > MAX_PRICE_PER_LITER) {
-    return [`Price / L is ₱${unitCost.toLocaleString('en-PH')} per liter. Did you enter the total amount instead of the price per liter?`];
-  }
-  if (averageCost > 0 && Math.abs(unitCost - averageCost) / averageCost > PRICE_DEVIATION_LIMIT) {
-    const pct = Math.round(((unitCost - averageCost) / averageCost) * 100);
-    return [`Price / L (₱${unitCost.toFixed(2)}) is ${pct > 0 ? '+' : ''}${pct}% from the current average cost (₱${averageCost.toFixed(2)}).`];
-  }
-  return [];
-}
-
-function FormGuide({ tips }: { tips: string[] }) {
-  return (
-    <details className="-mt-2 mb-4 text-xs text-slate-500">
-      <summary className="cursor-pointer select-none font-medium text-emerald-700 hover:text-emerald-800">Quick tips</summary>
-      <ul className="mt-2 list-disc space-y-1 pl-4">
-        {tips.map(tip => <li key={tip}>{tip}</li>)}
-      </ul>
-    </details>
-  );
-}
-
-function monthStartInput() {
-  const now = new Date();
-  return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), '01'].join('-');
-}
-
-function fmt(v: number) {
-  return v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function currency(v: number) {
-  return `₱${fmt(v)}`;
-}
-
-function csvEscape(value: string | number) {
-  const text = String(value ?? '');
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function downloadTextFile(filename: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function htmlEscape(value: string | number) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function formatDate(value: string) {
-  return new Date(`${value}T00:00:00`).toLocaleDateString('en-PH', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-function localDateKey(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString('en-PH', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function isBackdated(transactionDate: string, createdAt?: string | null) {
-  if (!createdAt) return false;
-  const encoded = localDateKey(createdAt);
-  return Boolean(encoded) && encoded > transactionDate;
-}
-
-function EncodedNote({ transactionDate, createdAt, always = false }: { transactionDate: string; createdAt?: string | null; always?: boolean }) {
-  if (!createdAt) return null;
-  const backdated = isBackdated(transactionDate, createdAt);
-  if (!backdated && !always) return null;
-  return (
-    <p className={`text-[11px] font-medium ${backdated ? 'text-amber-600' : 'text-slate-400'}`} title={backdated ? 'Entry was encoded after its transaction date' : 'Encoded on'}>
-      Encoded {formatDateTime(createdAt)}
-    </p>
-  );
-}
-
-function ReversedBadge() {
-  return <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700">Reversed</span>;
-}
-
-function formatTruckTarget(truck: TruckType) {
-  return `${truck.plate_number}${truck.driver_name ? ` - ${truck.driver_name}` : ''}`;
-}
-
-function formatEquipmentTarget(equipment: CompanyEquipment) {
-  return [
-    equipment.name,
-    equipment.plate_or_code ? `/ ${equipment.plate_or_code}` : '',
-    equipment.operator_name ? `(${equipment.operator_name})` : '',
-  ].filter(Boolean).join(' ');
-}
-
-function equipmentBranchLabel(equipment: CompanyEquipment, branches: FuelBranch[]) {
-  if (!equipment.branch_id) return 'All branches';
-  const branch = branches.find(item => item.id === equipment.branch_id);
-  return branch ? `${branch.company_name} - ${branch.name}` : 'Assigned branch';
-}
-
-function movementBadge(type: FuelInventoryLedger['movement_type']) {
-  const map: Record<FuelInventoryLedger['movement_type'], string> = {
-    OPENING_BALANCE: 'bg-sky-50 text-sky-700 border-sky-200',
-    PURCHASE: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    ISSUANCE: 'bg-orange-50 text-orange-700 border-orange-200',
-    ADJUSTMENT: 'bg-violet-50 text-violet-700 border-violet-200',
-    REVERSAL: 'bg-rose-50 text-rose-700 border-rose-200',
-  };
-  return map[type];
-}
-
-function DonutChart({ data }: { data: { label: string; value: number }[] }) {
-  const total = data.reduce((sum, item) => sum + item.value, 0);
-  let cursor = 0;
-  const gradient = total > 0
-    ? data.map((item, index) => {
-        const start = cursor;
-        const end = cursor + (item.value / total) * 100;
-        cursor = end;
-        return `${chartColors[index % chartColors.length]} ${start}% ${end}%`;
-      }).join(', ')
-    : '#e2e8f0 0% 100%';
-
-  return (
-    <div className="flex items-center gap-5 flex-wrap">
-      <div className="relative w-36 h-36 rounded-full shrink-0" style={{ background: `conic-gradient(${gradient})` }}>
-        <div className="absolute inset-8 rounded-full bg-white flex items-center justify-center text-center">
-          <div>
-            <p className="text-lg font-bold text-slate-800 tabular-nums">{fmt(total)}</p>
-            <p className="text-xs text-slate-500">liters</p>
-          </div>
-        </div>
-      </div>
-      <div className="space-y-2 min-w-48 flex-1">
-        {data.length === 0 ? (
-          <p className="text-sm text-slate-500">No issuances this month</p>
-        ) : data.map((item, index) => (
-          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
-            <span className="flex items-center gap-2 min-w-0">
-              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: chartColors[index % chartColors.length] }} />
-              <span className="text-slate-600 truncate">{item.label}</span>
-            </span>
-            <span className="font-semibold text-slate-800 tabular-nums">{fmt(item.value)} L</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+import { createFuelExports } from './fuel/createFuelExports';
+import FuelEquipment from './fuel/FuelEquipment';
+import FuelHistory from './fuel/FuelHistory';
+import FuelIssuances from './fuel/FuelIssuances';
+import FuelOverview from './fuel/FuelOverview';
+import FuelPurchases from './fuel/FuelPurchases';
+import { CATEGORY_COMPANY_EQUIPMENT, CATEGORY_COMPANY_TRUCK, CATEGORY_HAULER_OFFSET, FUEL_RECORDS_START, PAGE_SIZE, checkEntryDate, checkUnitCost, currency, equipmentBranchLabel, equipmentTypes, fmt, formatDate, formatEquipmentTarget, formatTruckTarget, isBackdated, issueCategories, monthStartInput, todayInput } from './fuel/fuelUtils';
+import type { EntryCheck, EquipmentFormState, FuelIssuanceWithTarget, FuelManagementProps, FuelTab } from './fuel/types';
+import ReadOnlyNotice from './ReadOnlyNotice';
 
 export default function FuelManagement({
   canAddPurchase = false,
@@ -341,7 +96,7 @@ export default function FuelManagement({
   const [reencodeAfterReverse, setReencodeAfterReverse] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState<FuelPurchase | null>(null);
   const [editingIssuance, setEditingIssuance] = useState<FuelIssuanceWithTarget | null>(null);
-  const [pendingSave, setPendingSave] = useState<{ kind: 'purchase' | 'issuance' | 'adjustment'; warnings: string[] } | null>(null);
+  const [pendingSave, setPendingSave] = useState<{ kind: 'purchase' | 'issuance' | 'adjustment'; warnings: string[]; } | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<CompanyEquipment | null>(null);
   const [infoModal, setInfoModal] = useState('');
   const [adjustmentForm, setAdjustmentForm] = useState({
@@ -464,14 +219,14 @@ export default function FuelManagement({
     return issuances.filter(item =>
       isWithinRange(item.issuance_date, fuelDates.start, fuelDates.end) &&
       (issuanceCategoryFilter === 'ALL' || item.category === issuanceCategoryFilter) && (
-      !q ||
-      item.category.toLowerCase().includes(q) ||
-      item.issued_to.toLowerCase().includes(q) ||
-      item.reference_no.toLowerCase().includes(q) ||
-      (item.trucks?.plate_number ?? '').toLowerCase().includes(q) ||
-      (item.company_equipment?.name ?? '').toLowerCase().includes(q) ||
-      (item.company_equipment?.plate_or_code ?? '').toLowerCase().includes(q)
-    ));
+        !q ||
+        item.category.toLowerCase().includes(q) ||
+        item.issued_to.toLowerCase().includes(q) ||
+        item.reference_no.toLowerCase().includes(q) ||
+        (item.trucks?.plate_number ?? '').toLowerCase().includes(q) ||
+        (item.company_equipment?.name ?? '').toLowerCase().includes(q) ||
+        (item.company_equipment?.plate_or_code ?? '').toLowerCase().includes(q)
+      ));
   }, [fuelDates.end, fuelDates.start, issuanceCategoryFilter, issuances, search]);
 
   // Issuance categories with how many issuances each has in the current date range.
@@ -1124,124 +879,29 @@ export default function FuelManagement({
   const purchaseFilteredTotals = useMemo(() => filteredPurchases
     .filter(item => !reversal.reversedSourceIds.has(item.id))
     .reduce((sum, item) => ({ liters: sum.liters + Number(item.liters), amount: sum.amount + Number(item.total_amount) }), { liters: 0, amount: 0 }),
-  [filteredPurchases, reversal]);
+    [filteredPurchases, reversal]);
   const issuanceFilteredTotals = useMemo(() => filteredIssuances
     .filter(item => !reversal.reversedSourceIds.has(item.id))
     .reduce((sum, item) => ({ liters: sum.liters + Number(item.liters), amount: sum.amount + Number(item.total_value) }), { liters: 0, amount: 0 }),
-  [filteredIssuances, reversal]);
+    [filteredIssuances, reversal]);
 
-  function exportFilterLines() {
-    if (!usesDateFilter) return [];
-    return [
-      `Dates: ${fuelDates.active ? fuelDates.label : 'All dates'}`,
-      ...(activeTab === 'issuances' ? [`Category: ${issuanceCategoryFilter === 'ALL' ? 'All categories' : issuanceCategoryFilter}`] : []),
-      ...(search.trim() ? [`Search: ${search.trim()}`] : []),
-    ];
-  }
-
-  function exportSlug() {
-    const parts = [
-      activeTab === 'issuances' && issuanceCategoryFilter !== 'ALL' ? issuanceCategoryFilter : '',
-      fuelDates.active ? `${fuelDates.start || 'start'}-to-${fuelDates.end || 'today'}` : '',
-    ].filter(Boolean).join('-');
-    return parts ? `-${parts.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : '';
-  }
-
-  function exportRows(): { title: string; filename: string; headers: string[]; rows: (string | number)[][] } {
-    if (activeTab === 'purchases') {
-      return {
-        title: 'Fuel Purchases',
-        filename: `fuel-purchases${exportSlug()}`,
-        headers: ['Date', 'Supplier', 'Reference', 'Liters', 'Unit Cost', 'Total', 'Status', 'Encoded At', 'Remarks'],
-        rows: [
-          ...filteredPurchases.map(item => [item.purchase_date, item.supplier, item.reference_no, fmt(item.liters), fmt(item.unit_cost), fmt(item.total_amount), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
-          ['Total (excluding reversed)', '', '', fmt(purchaseFilteredTotals.liters), '', fmt(purchaseFilteredTotals.amount), '', '', ''],
-        ],
-      };
-    }
-    if (activeTab === 'issuances') {
-      return {
-        title: issuanceCategoryFilter === 'ALL' ? 'Fuel Issuances' : `Fuel Issuances - ${issuanceCategoryFilter}`,
-        filename: `fuel-issuances${exportSlug()}`,
-        headers: ['Date', 'Category', 'Issued To', 'Truck', 'Equipment', 'Reference', 'Liters', 'Unit Cost', 'Total Value', 'Status', 'Encoded At', 'Remarks'],
-        rows: [
-          ...filteredIssuances.map(item => [item.issuance_date, item.category, item.issued_to, item.trucks?.plate_number ?? '', item.company_equipment ? formatEquipmentTarget(item.company_equipment) : '', item.reference_no, fmt(item.liters), fmt(item.unit_cost_snapshot), fmt(item.total_value), reversal.reversedSourceIds.has(item.id) ? 'Reversed' : 'Active', formatDateTime(item.created_at), item.remarks]),
-          ['Total (excluding reversed)', '', '', '', '', '', fmt(issuanceFilteredTotals.liters), '', fmt(issuanceFilteredTotals.amount), '', '', ''],
-        ],
-      };
-    }
-    if (activeTab === 'equipment') {
-      return {
-        title: 'Company Equipment',
-        filename: 'company-equipment',
-        headers: ['Name', 'Type', 'Code / Plate', 'Operator', 'Branch', 'Notes'],
-        rows: visibleCompanyEquipment.map(item => [item.name, item.equipment_type, item.plate_or_code, item.operator_name, equipmentBranchLabel(item, branches), item.notes]),
-      };
-    }
-    return {
-      title: 'Fuel Inventory History',
-      filename: `fuel-inventory-history${exportSlug()}`,
-      headers: ['Date', 'Encoded At', 'Type', 'Reference', 'Description', 'Liters Delta', 'Unit Cost', 'Value Delta', 'Balance Liters', 'Average Cost'],
-      rows: filteredLedger.map(item => [item.movement_date, formatDateTime(item.created_at), item.movement_type, item.reference_no, item.description, fmt(item.liters_delta), fmt(item.unit_cost), fmt(item.value_delta), fmt(item.balance_liters_after), fmt(item.weighted_average_cost_after)]),
-    };
-  }
-
-  function exportCsv() {
-    const report = exportRows();
-    const lines = [
-      [report.title],
-      [`Branch: ${selectedBranch?.name ?? 'All branches'}`],
-      ...exportFilterLines().map(line => [line]),
-      [`Generated: ${new Date().toLocaleString('en-PH')}`],
-      [],
-      report.headers,
-      ...report.rows,
-    ];
-    const csv = `\uFEFF${lines.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\r\n')}`;
-    downloadTextFile(`${report.filename}-${todayInput()}.csv`, csv, 'text/csv;charset=utf-8');
-  }
-
-  function exportPdf() {
-    const report = exportRows();
-    const rowsHtml = report.rows.map(row => `<tr>${row.map(cell => `<td>${htmlEscape(cell)}</td>`).join('')}</tr>`).join('');
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setInfoModal('Please allow pop-ups to export the report PDF.');
-      return;
-    }
-
-    printWindow.document.write(`<!doctype html>
-      <html>
-        <head>
-          <title>${htmlEscape(report.title)}</title>
-          <style>
-            body { font-family: Arial, sans-serif; color: #0f172a; margin: 32px; }
-            h1 { font-size: 22px; margin: 0 0 8px; }
-            .meta { color: #475569; font-size: 12px; margin-bottom: 18px; line-height: 1.55; }
-            table { width: 100%; border-collapse: collapse; font-size: 11px; }
-            th { text-align: left; background: #f1f5f9; color: #475569; text-transform: uppercase; }
-            th, td { border: 1px solid #e2e8f0; padding: 7px 8px; }
-            td:nth-child(n+4), th:nth-child(n+4) { text-align: right; }
-            @media print { body { margin: 18mm; } }
-          </style>
-        </head>
-        <body>
-          <h1>${htmlEscape(report.title)}</h1>
-          <div class="meta">
-            <div>Branch: ${htmlEscape(selectedBranch?.name ?? 'All branches')}</div>
-            ${exportFilterLines().map(line => `<div>${htmlEscape(line)}</div>`).join('')}
-            <div>Generated: ${htmlEscape(new Date().toLocaleString('en-PH'))}</div>
-          </div>
-          <table>
-            <thead><tr>${report.headers.map(header => `<th>${htmlEscape(header)}</th>`).join('')}</tr></thead>
-            <tbody>${rowsHtml || `<tr><td colspan="${report.headers.length}">No records found.</td></tr>`}</tbody>
-          </table>
-        </body>
-      </html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-  }
+  const { exportCsv, exportPdf } = createFuelExports({
+    usesDateFilter,
+    fuelDates,
+    activeTab,
+    issuanceCategoryFilter,
+    search,
+    filteredPurchases,
+    reversal,
+    purchaseFilteredTotals,
+    filteredIssuances,
+    issuanceFilteredTotals,
+    visibleCompanyEquipment,
+    branches,
+    filteredLedger,
+    selectedBranch,
+    setInfoModal
+  });
 
   const pagedPurchases = useMemo(() => paginate(filteredPurchases, Math.min(purchasePage, Math.max(1, Math.ceil(filteredPurchases.length / PAGE_SIZE))), PAGE_SIZE), [filteredPurchases, purchasePage]);
   const pagedIssuances = useMemo(() => paginate(filteredIssuances, Math.min(issuancePage, Math.max(1, Math.ceil(filteredIssuances.length / PAGE_SIZE))), PAGE_SIZE), [filteredIssuances, issuancePage]);
@@ -1256,7 +916,7 @@ export default function FuelManagement({
   const isCompanyEquipmentIssue = issuanceForm.category === CATEGORY_COMPANY_EQUIPMENT;
   const usesStructuredIssuanceTarget = isHaulerOffsetIssue || isCompanyTruckIssue || isCompanyEquipmentIssue;
 
-  const tabs: { id: FuelTab; label: string }[] = [
+  const tabs: { id: FuelTab; label: string; }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'purchases', label: 'Fuel Purchases' },
     { id: 'issuances', label: 'Fuel Issuances' },
@@ -1308,11 +968,10 @@ export default function FuelManagement({
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-3 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
-              activeTab === tab.id
-                ? 'border-emerald-500 text-emerald-700'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
+            className={`px-3 py-3 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${activeTab === tab.id
+              ? 'border-emerald-500 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
           >
             {tab.label}
           </button>
@@ -1353,9 +1012,8 @@ export default function FuelManagement({
                 value={issuanceCategoryFilter}
                 onChange={e => setIssuanceCategoryFilter(e.target.value)}
                 aria-label="Filter by category"
-                className={`rounded-lg border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 ${
-                  issuanceCategoryFilter === 'ALL' ? 'border-slate-200 text-slate-600' : 'border-emerald-300 font-medium text-emerald-700'
-                }`}
+                className={`rounded-lg border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 ${issuanceCategoryFilter === 'ALL' ? 'border-slate-200 text-slate-600' : 'border-emerald-300 font-medium text-emerald-700'
+                  }`}
               >
                 <option value="ALL">All categories</option>
                 {issuanceCategoryOptions.map(([category, count]) => (
@@ -1391,285 +1049,103 @@ export default function FuelManagement({
         </div>
       ) : (
         <>
-          {activeTab === 'overview' && (
-            <div className="space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {[
-                  { label: 'Current Fuel Inventory', value: `${fmt(summary.currentLiters)} L`, sub: `Value: ${currency(summary.inventoryValue)}`, icon: <Fuel size={22} className="text-emerald-500" />, bg: 'bg-emerald-50' },
-                  { label: 'Purchased This Month', value: `${fmt(summary.purchasedThisMonth)} L`, sub: `Total cost: ${currency(summary.purchaseCostThisMonth)}`, icon: <ArrowDownCircle size={22} className="text-sky-500" />, bg: 'bg-sky-50' },
-                  { label: 'Issued This Month', value: `${fmt(summary.issuedThisMonth)} L`, sub: `Total value: ${currency(summary.issuedValueThisMonth)}`, icon: <ArrowUpCircle size={22} className="text-orange-500" />, bg: 'bg-orange-50' },
-                  { label: 'Average Cost', value: `${currency(summary.averageCost)} / L`, sub: 'Weighted average', icon: <Database size={22} className="text-violet-500" />, bg: 'bg-violet-50' },
-                ].map(card => (
-                  <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-5">
-                    <div className={`w-11 h-11 rounded-xl ${card.bg} flex items-center justify-center mb-4`}>
-                      {card.icon}
-                    </div>
-                    <p className="text-sm text-slate-500 font-medium">{card.label}</p>
-                    <p className="text-2xl font-bold text-slate-800 mt-1 tabular-nums">{card.value}</p>
-                    <p className="text-xs text-slate-400 mt-1">{card.sub}</p>
-                  </div>
-                ))}
-              </div>
+          <FuelOverview
+            activeTab={activeTab}
+            summary={summary}
+            issuances={issuances}
+            reversal={reversal}
+            setActiveTab={setActiveTab}
+            purchases={purchases}
+            canAddPurchase={canAddPurchase}
+            canIssue={canIssue}
+            categoryChartData={categoryChartData}
+          />
 
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-                <div className="xl:col-span-2 space-y-5">
-                  <RecentIssuances rows={issuances.slice(0, 5)} reversedIds={reversal.reversedSourceIds} onViewAll={() => setActiveTab('issuances')} />
-                  <RecentPurchases rows={purchases.slice(0, 5)} reversedIds={reversal.reversedSourceIds} onViewAll={() => setActiveTab('purchases')} />
-                </div>
-                <div className="space-y-5">
-                  <div className="bg-white rounded-xl border border-slate-200 p-5">
-                    <h2 className="font-semibold text-slate-800 mb-4">Quick Actions</h2>
-                    <div className="space-y-2">
-                      {canAddPurchase && <button onClick={() => setActiveTab('purchases')} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold"><Plus size={15} /> Add Fuel Purchase</button>}
-                      {canIssue && <button onClick={() => setActiveTab('issuances')} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-semibold"><Truck size={15} /> Issue Fuel</button>}
-                      <button onClick={() => setActiveTab('history')} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"><History size={15} /> View Inventory History</button>
-                    </div>
-                  </div>
-                  <div className="bg-white rounded-xl border border-slate-200 p-5">
-                    <h2 className="font-semibold text-slate-800 mb-4">Fuel Issuance by Category</h2>
-                    <DonutChart data={categoryChartData} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <FuelPurchases
+            activeTab={activeTab}
+            canAddPurchase={canAddPurchase}
+            editingPurchase={editingPurchase}
+            handlePurchaseSubmit={handlePurchaseSubmit}
+            purchaseForm={purchaseForm}
+            setPurchaseForm={setPurchaseForm}
+            saving={saving}
+            cancelEditPurchase={cancelEditPurchase}
+            pagedPurchases={pagedPurchases}
+            reversal={reversal}
+            postPurchaseToExpenses={postPurchaseToExpenses}
+            canEditPurchase={canEditPurchase}
+            startEditPurchase={startEditPurchase}
+            purchaseCurrentPage={purchaseCurrentPage}
+            filteredPurchases={filteredPurchases}
+            setPurchasePage={setPurchasePage}
+          />
 
-          {activeTab === 'purchases' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {(canAddPurchase || editingPurchase) && (
-                <div className={`bg-white rounded-xl border p-5 h-fit ${editingPurchase ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'}`}>
-                  <h2 className="font-semibold text-slate-800 mb-4">{editingPurchase ? 'Edit Fuel Purchase' : 'Add Fuel Purchase'}</h2>
-                  {editingPurchase && (
-                    <p className="-mt-2 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Editing {editingPurchase.supplier} {editingPurchase.reference_no ? `(${editingPurchase.reference_no}) ` : ''}from {formatDate(editingPurchase.purchase_date)}. Inventory and the ledger are corrected automatically.
-                    </p>
-                  )}
-                  <FormGuide tips={[
-                    'Price / L is per liter (e.g. 92.70), not the receipt total.',
-                    'Encode purchases before the issuances that used them, so stock and cost stay correct.',
-                    `Entries older than ${REMARK_REQUIRED_AFTER_DAYS} days need a remark.`,
-                    'Wrong entry? Reverse it in Inventory Ledger and tick "Re-encode" to fix it.',
-                  ]} />
-                  <form onSubmit={handlePurchaseSubmit} className="space-y-4">
-                    <Field label="Date"><input required type="date" value={purchaseForm.purchase_date} onChange={e => setPurchaseForm(f => ({ ...f, purchase_date: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Supplier"><input required value={purchaseForm.supplier} onChange={e => setPurchaseForm(f => ({ ...f, supplier: e.target.value }))} className={inputClass} placeholder="RTM Gas Station" /></Field>
-                    <Field label="Reference"><input value={purchaseForm.reference_no} onChange={e => setPurchaseForm(f => ({ ...f, reference_no: e.target.value }))} className={inputClass} placeholder="PO-2026-0701-001" /></Field>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={purchaseForm.liters} onChange={e => setPurchaseForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
-                      <Field label="Price / L"><input required type="number" min="0" step="0.01" value={purchaseForm.unit_cost} onChange={e => setPurchaseForm(f => ({ ...f, unit_cost: e.target.value }))} className={inputClass} /></Field>
-                    </div>
-                    {editingPurchase ? (
-                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-                        {editingPurchase.expense_id
-                          ? 'The linked Diesel expense will be updated to the new amount and date.'
-                          : 'Not posted to Expenses. Use "Post to Expenses" in the table after saving if needed.'}
-                      </p>
-                    ) : (
-                      <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                        <input type="checkbox" checked={purchaseForm.post_to_expenses} onChange={e => setPurchaseForm(f => ({ ...f, post_to_expenses: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-emerald-500" />
-                        <span><span className="block font-semibold">Post to Expenses</span><span className="block text-xs text-slate-500">Creates the linked Diesel expense once.</span></span>
-                      </label>
-                    )}
-                    <Field label="Remarks"><textarea value={purchaseForm.remarks} onChange={e => setPurchaseForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
-                    <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {saving ? <Loader2 size={15} className="animate-spin" /> : editingPurchase ? <Pencil size={15} /> : <Plus size={15} />}
-                      {editingPurchase ? 'Update Purchase' : 'Save Purchase'}
-                    </button>
-                    {editingPurchase && (
-                      <button type="button" onClick={cancelEditPurchase} disabled={saving} className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-70">
-                        Cancel Edit
-                      </button>
-                    )}
-                  </form>
-                </div>
-              )}
-              <div className={canAddPurchase || editingPurchase ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <PurchasesTable rows={pagedPurchases} reversedIds={reversal.reversedSourceIds} canPost={canAddPurchase} saving={saving} onPost={postPurchaseToExpenses} canEdit={canEditPurchase} editingId={editingPurchase?.id} onEdit={startEditPurchase} />
-                <Pagination page={purchaseCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredPurchases.length} onPageChange={setPurchasePage} />
-              </div>
-            </div>
-          )}
+          <FuelIssuances
+            activeTab={activeTab}
+            canIssue={canIssue}
+            editingIssuance={editingIssuance}
+            handleIssuanceSubmit={handleIssuanceSubmit}
+            issuanceForm={issuanceForm}
+            setIssuanceForm={setIssuanceForm}
+            handleIssuanceCategoryChange={handleIssuanceCategoryChange}
+            isHaulerOffsetIssue={isHaulerOffsetIssue}
+            handleTruckPick={handleTruckPick}
+            haulerTrucks={haulerTrucks}
+            isCompanyTruckIssue={isCompanyTruckIssue}
+            companyTrucks={companyTrucks}
+            isCompanyEquipmentIssue={isCompanyEquipmentIssue}
+            handleEquipmentPick={handleEquipmentPick}
+            availableCompanyEquipment={availableCompanyEquipment}
+            usesStructuredIssuanceTarget={usesStructuredIssuanceTarget}
+            saving={saving}
+            cancelEditIssuance={cancelEditIssuance}
+            pagedIssuances={pagedIssuances}
+            reversal={reversal}
+            canEditIssuance={canEditIssuance}
+            startEditIssuance={startEditIssuance}
+            issuanceCurrentPage={issuanceCurrentPage}
+            filteredIssuances={filteredIssuances}
+            setIssuancePage={setIssuancePage}
+          />
 
-          {activeTab === 'issuances' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {(canIssue || editingIssuance) && (
-                <div className={`bg-white rounded-xl border p-5 h-fit ${editingIssuance ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'}`}>
-                  <h2 className="font-semibold text-slate-800 mb-4">{editingIssuance ? 'Edit Fuel Issuance' : 'Issue Fuel'}</h2>
-                  {editingIssuance && (
-                    <p className="-mt-2 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Editing issuance to {editingIssuance.issued_to} ({fmt(Number(editingIssuance.liters))} L) from {formatDate(editingIssuance.issuance_date)}. Its cost stays at {currency(Number(editingIssuance.unit_cost_snapshot))}/L.
-                    </p>
-                  )}
-                  <FormGuide tips={[
-                    'Issuances use the current stock and average cost, even when backdated.',
-                    'Encode the purchase first if the fuel came from a delivery not yet recorded.',
-                    `Entries older than ${REMARK_REQUIRED_AFTER_DAYS} days need a remark (e.g. "from logbook").`,
-                  ]} />
-                  <form onSubmit={handleIssuanceSubmit} className="space-y-4">
-                    <Field label="Date"><input required type="date" value={issuanceForm.issuance_date} onChange={e => setIssuanceForm(f => ({ ...f, issuance_date: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Category">
-                      <select value={issuanceForm.category} onChange={e => handleIssuanceCategoryChange(e.target.value)} className={inputClass}>
-                        {issueCategories.map(category => <option key={category} value={category}>{category}</option>)}
-                      </select>
-                    </Field>
-                    {isHaulerOffsetIssue && (
-                      <Field label="Hauler Truck">
-                        <select required value={issuanceForm.truck_id} onChange={e => handleTruckPick(e.target.value, 'hauler')} className={inputClass}>
-                          <option value="">Select hauler truck...</option>
-                          {haulerTrucks.map(truck => <option key={truck.id} value={truck.id}>{truck.plate_number} - {truck.driver_name || 'No driver'}</option>)}
-                        </select>
-                      </Field>
-                    )}
-                    {isCompanyTruckIssue && (
-                      <Field label="Company Truck">
-                        <select required value={issuanceForm.truck_id} onChange={e => handleTruckPick(e.target.value, 'company')} className={inputClass}>
-                          <option value="">Select company truck...</option>
-                          {companyTrucks.map(truck => <option key={truck.id} value={truck.id}>{truck.plate_number} - {truck.driver_name || 'No driver'}</option>)}
-                        </select>
-                      </Field>
-                    )}
-                    {isCompanyEquipmentIssue && (
-                      <Field label="Company Equipment">
-                        <select required value={issuanceForm.company_equipment_id} onChange={e => handleEquipmentPick(e.target.value)} className={inputClass}>
-                          <option value="">{availableCompanyEquipment.length === 0 ? 'No equipment available' : 'Select equipment...'}</option>
-                          {availableCompanyEquipment.map(equipment => (
-                            <option key={equipment.id} value={equipment.id}>
-                              {equipment.equipment_type} - {formatEquipmentTarget(equipment)}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                    )}
-                    <Field label="Issued To">
-                      <input
-                        required
-                        value={issuanceForm.issued_to}
-                        readOnly={usesStructuredIssuanceTarget}
-                        onChange={e => setIssuanceForm(f => ({ ...f, issued_to: e.target.value }))}
-                        className={`${inputClass} ${usesStructuredIssuanceTarget ? 'bg-slate-50 text-slate-500' : ''}`}
-                        placeholder={usesStructuredIssuanceTarget ? 'Auto-filled from selected target' : 'Javi / Site Errand'}
-                      />
-                    </Field>
-                    <Field label="Reference"><input value={issuanceForm.reference_no} onChange={e => setIssuanceForm(f => ({ ...f, reference_no: e.target.value }))} className={inputClass} placeholder="FI-2026-0702-015" /></Field>
-                    <Field label="Liters"><input required type="number" min="0.01" step="0.01" value={issuanceForm.liters} onChange={e => setIssuanceForm(f => ({ ...f, liters: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Remarks"><textarea value={issuanceForm.remarks} onChange={e => setIssuanceForm(f => ({ ...f, remarks: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
-                    <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {saving ? <Loader2 size={15} className="animate-spin" /> : editingIssuance ? <Pencil size={15} /> : <ClipboardList size={15} />}
-                      {editingIssuance ? 'Update Issuance' : 'Issue Fuel'}
-                    </button>
-                    {editingIssuance && (
-                      <button type="button" onClick={cancelEditIssuance} disabled={saving} className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-70">
-                        Cancel Edit
-                      </button>
-                    )}
-                  </form>
-                </div>
-              )}
-              <div className={canIssue || editingIssuance ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <IssuancesTable rows={pagedIssuances} reversedIds={reversal.reversedSourceIds} canEdit={canEditIssuance} editingId={editingIssuance?.id} onEdit={startEditIssuance} />
-                <Pagination page={issuanceCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredIssuances.length} onPageChange={setIssuancePage} />
-              </div>
-            </div>
-          )}
+          <FuelEquipment
+            activeTab={activeTab}
+            canManageEquipment={canManageEquipment}
+            handleEquipmentSubmit={handleEquipmentSubmit}
+            equipmentForm={equipmentForm}
+            setEquipmentForm={setEquipmentForm}
+            branches={branches}
+            equipmentSaving={equipmentSaving}
+            pagedEquipment={pagedEquipment}
+            editingEquipment={editingEquipment}
+            editEquipmentForm={editEquipmentForm}
+            setEditEquipmentForm={setEditEquipmentForm}
+            startEquipmentEdit={startEquipmentEdit}
+            setEditingEquipment={setEditingEquipment}
+            handleEquipmentEditSubmit={handleEquipmentEditSubmit}
+            deactivateEquipment={deactivateEquipment}
+            equipmentCurrentPage={equipmentCurrentPage}
+            visibleCompanyEquipment={visibleCompanyEquipment}
+            setEquipmentPage={setEquipmentPage}
+          />
 
-          {activeTab === 'equipment' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {canManageEquipment && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
-                  <h2 className="font-semibold text-slate-800 mb-4">Add Company Equipment</h2>
-                  <form onSubmit={handleEquipmentSubmit} className="space-y-4">
-                    <Field label="Branch / Company">
-                      <select value={equipmentForm.branch_id} onChange={e => setEquipmentForm(f => ({ ...f, branch_id: e.target.value }))} className={inputClass}>
-                        <option value="">All branches</option>
-                        {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.company_name} - {branch.name}</option>)}
-                      </select>
-                    </Field>
-                    <Field label="Equipment Name"><input required value={equipmentForm.name} onChange={e => setEquipmentForm(f => ({ ...f, name: e.target.value }))} className={inputClass} placeholder="Loader WA380" /></Field>
-                    <Field label="Type">
-                      <select value={equipmentForm.equipment_type} onChange={e => setEquipmentForm(f => ({ ...f, equipment_type: e.target.value }))} className={inputClass}>
-                        {equipmentTypes.map(type => <option key={type} value={type}>{type}</option>)}
-                      </select>
-                    </Field>
-                    <Field label="Code / Plate"><input value={equipmentForm.plate_or_code} onChange={e => setEquipmentForm(f => ({ ...f, plate_or_code: e.target.value }))} className={inputClass} placeholder="WA380" /></Field>
-                    <Field label="Operator"><input value={equipmentForm.operator_name} onChange={e => setEquipmentForm(f => ({ ...f, operator_name: e.target.value }))} className={inputClass} placeholder="Operator name" /></Field>
-                    <Field label="Notes"><textarea value={equipmentForm.notes} onChange={e => setEquipmentForm(f => ({ ...f, notes: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
-                    <button disabled={equipmentSaving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {equipmentSaving ? <Loader2 size={15} className="animate-spin" /> : <Wrench size={15} />}
-                      Save Equipment
-                    </button>
-                  </form>
-                </div>
-              )}
-              <div className={canManageEquipment ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <EquipmentTable
-                  rows={pagedEquipment}
-                  branches={branches}
-                  canManage={canManageEquipment}
-                  editingEquipment={editingEquipment}
-                  editForm={editEquipmentForm}
-                  setEditForm={setEditEquipmentForm}
-                  onStartEdit={startEquipmentEdit}
-                  onCancelEdit={() => setEditingEquipment(null)}
-                  onSubmitEdit={handleEquipmentEditSubmit}
-                  onDeactivate={deactivateEquipment}
-                  saving={equipmentSaving}
-                />
-                <Pagination page={equipmentCurrentPage} pageSize={PAGE_SIZE} totalItems={visibleCompanyEquipment.length} onPageChange={setEquipmentPage} />
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'history' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {canAdjust && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 h-fit">
-                  <h2 className="font-semibold text-slate-800 mb-4">Inventory Adjustment</h2>
-                  <FormGuide tips={[
-                    'Use only for physical count differences. Negative liters = deduction.',
-                    'To fix a wrong purchase or issuance, use Reverse in the table instead.',
-                  ]} />
-                  <form onSubmit={handleAdjustmentSubmit} className="space-y-4">
-                    <Field label="Date"><input required type="date" value={adjustmentForm.movement_date} onChange={e => setAdjustmentForm(f => ({ ...f, movement_date: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Liters Delta"><input required type="number" step="0.01" value={adjustmentForm.liters_delta} onChange={e => setAdjustmentForm(f => ({ ...f, liters_delta: e.target.value }))} className={inputClass} placeholder="Use negative for deduction" /></Field>
-                    <Field label="Unit Cost"><input required type="number" min="0" step="0.01" value={adjustmentForm.unit_cost} onChange={e => setAdjustmentForm(f => ({ ...f, unit_cost: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Reference"><input value={adjustmentForm.reference_no} onChange={e => setAdjustmentForm(f => ({ ...f, reference_no: e.target.value }))} className={inputClass} /></Field>
-                    <Field label="Description"><textarea value={adjustmentForm.description} onChange={e => setAdjustmentForm(f => ({ ...f, description: e.target.value }))} className={`${inputClass} resize-none`} rows={2} /></Field>
-                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input type="checkbox" checked={adjustmentForm.is_opening_balance} onChange={e => setAdjustmentForm(f => ({ ...f, is_opening_balance: e.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-200" />
-                      Opening balance
-                    </label>
-                    <button disabled={saving} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold disabled:opacity-70">
-                      {saving ? <Loader2 size={15} className="animate-spin" /> : <History size={15} />}
-                      Save Movement
-                    </button>
-                  </form>
-                </div>
-              )}
-              <div className={canAdjust ? 'xl:col-span-2' : 'xl:col-span-3'}>
-                <div className="mb-3 flex flex-col gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex gap-2.5">
-                    <Info size={16} className="mt-0.5 shrink-0 text-sky-600" />
-                    <div>
-                      <p className="font-semibold">How to read the Balance column</p>
-                      <p className="mt-0.5 text-sky-800">
-                        Balance is the inventory right after each entry was <span className="font-semibold">encoded</span>, not after its transaction date.
-                        {backdatedLedgerCount > 0 && (
-                          <> <span className="font-semibold text-amber-700">{backdatedLedgerCount} {backdatedLedgerCount === 1 ? 'entry was' : 'entries were'} encoded later than its transaction date</span> (marked in orange), so sorting by transaction date can make the balance look like it jumped.</>
-                        )}
-                        {' '}Use <span className="font-semibold">Encoded order</span> to follow the actual step-by-step balance.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="inline-flex shrink-0 self-start rounded-lg border border-sky-200 bg-white p-0.5 text-xs font-semibold">
-                    <button type="button" onClick={() => setLedgerOrder('encoded')} className={`rounded-md px-3 py-1.5 ${ledgerOrder === 'encoded' ? 'bg-sky-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Encoded order</button>
-                    <button type="button" onClick={() => setLedgerOrder('date')} className={`rounded-md px-3 py-1.5 ${ledgerOrder === 'date' ? 'bg-sky-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Transaction date</button>
-                  </div>
-                </div>
-                <HistoryTable rows={pagedLedger} reversedLedgerIds={reversal.reversedLedgerIds} showEncoded={ledgerOrder === 'encoded'} canAdjust={canAdjust} onReverse={reverseMovement} saving={saving} />
-                <Pagination page={historyCurrentPage} pageSize={PAGE_SIZE} totalItems={filteredLedger.length} onPageChange={setHistoryPage} />
-              </div>
-            </div>
-          )}
+          <FuelHistory
+            activeTab={activeTab}
+            canAdjust={canAdjust}
+            handleAdjustmentSubmit={handleAdjustmentSubmit}
+            adjustmentForm={adjustmentForm}
+            setAdjustmentForm={setAdjustmentForm}
+            saving={saving}
+            backdatedLedgerCount={backdatedLedgerCount}
+            setLedgerOrder={setLedgerOrder}
+            ledgerOrder={ledgerOrder}
+            pagedLedger={pagedLedger}
+            reversal={reversal}
+            reverseMovement={reverseMovement}
+            historyCurrentPage={historyCurrentPage}
+            filteredLedger={filteredLedger}
+            setHistoryPage={setHistoryPage}
+          />
         </>
       )}
 
@@ -1765,341 +1241,6 @@ export default function FuelManagement({
         onClose={() => setInfoModal('')}
         onConfirm={() => setInfoModal('')}
       />
-    </div>
-  );
-}
-
-const inputClass = 'w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 bg-white';
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-semibold text-slate-500 mb-1">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function RecentIssuances({ rows, reversedIds, onViewAll }: { rows: FuelIssuanceWithTarget[]; reversedIds: Set<string>; onViewAll: () => void }) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-        <h2 className="font-semibold text-slate-800">Recent Fuel Issuances</h2>
-        <button onClick={onViewAll} className="text-sm text-emerald-600 font-medium hover:text-emerald-700">View All</button>
-      </div>
-      <IssuancesTable rows={rows} reversedIds={reversedIds} compact />
-    </div>
-  );
-}
-
-function RecentPurchases({ rows, reversedIds, onViewAll }: { rows: FuelPurchase[]; reversedIds: Set<string>; onViewAll: () => void }) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-        <h2 className="font-semibold text-slate-800">Recent Fuel Purchases</h2>
-        <button onClick={onViewAll} className="text-sm text-emerald-600 font-medium hover:text-emerald-700">View All</button>
-      </div>
-      <PurchasesTable rows={rows} reversedIds={reversedIds} compact />
-    </div>
-  );
-}
-
-function EditRowButton({ onClick, active }: { onClick: () => void; active: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title="Edit"
-      aria-label="Edit"
-      className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${active ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
-    >
-      <Pencil size={13} />
-    </button>
-  );
-}
-
-function PurchasesTable({ rows, reversedIds, compact = false, canPost = false, saving = false, onPost, canEdit = false, editingId, onEdit }: { rows: FuelPurchase[]; reversedIds?: Set<string>; compact?: boolean; canPost?: boolean; saving?: boolean; onPost?: (purchase: FuelPurchase) => void; canEdit?: boolean; editingId?: string; onEdit?: (purchase: FuelPurchase) => void }) {
-  const showEdit = canEdit && !compact && Boolean(onEdit);
-  return (
-    <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              <th className="px-5 py-3 text-left">Date</th>
-              <th className="px-4 py-3 text-left">Supplier</th>
-              <th className="px-4 py-3 text-left">Reference</th>
-              <th className="px-4 py-3 text-right">Liters</th>
-              <th className="px-4 py-3 text-right">Price / L</th>
-              <th className="px-4 py-3 text-right">Total</th>
-              <th className="px-4 py-3 text-center">Expense</th>
-              {showEdit && <th className="px-3 py-3"><span className="sr-only">Edit</span></th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr><td colSpan={showEdit ? 8 : 7} className="px-4 py-12 text-center text-slate-400">No fuel purchases found</td></tr>
-            ) : rows.map(item => (
-              <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
-                  {formatDate(item.purchase_date)}
-                  <EncodedNote transactionDate={item.purchase_date} createdAt={item.created_at} />
-                </td>
-                <td className="px-4 py-3 text-slate-800 font-medium">{item.supplier}</td>
-                <td className="px-4 py-3 text-slate-500 font-mono text-xs">{item.reference_no || '—'}</td>
-                <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>
-                <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{currency(item.unit_cost)}</td>
-                <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(item.total_amount)}</td>
-                <td className="px-4 py-3 text-center">
-                  {reversedIds?.has(item.id) ? (
-                    <ReversedBadge />
-                  ) : item.expense_id ? (
-                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">Expense Posted</span>
-                  ) : canPost && !compact ? (
-                    <button type="button" onClick={() => onPost?.(item)} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"><ClipboardList size={12} /> Post to Expenses</button>
-                  ) : (
-                    <span className="text-xs text-slate-400">Unposted</span>
-                  )}
-                </td>
-                {showEdit && (
-                  <td className="px-3 py-3 text-center">
-                    {!reversedIds?.has(item.id) && <EditRowButton active={editingId === item.id} onClick={() => onEdit?.(item)} />}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function EquipmentTable({
-  rows,
-  branches,
-  canManage,
-  editingEquipment,
-  editForm,
-  setEditForm,
-  onStartEdit,
-  onCancelEdit,
-  onSubmitEdit,
-  onDeactivate,
-  saving,
-}: {
-  rows: CompanyEquipment[];
-  branches: FuelBranch[];
-  canManage: boolean;
-  editingEquipment: CompanyEquipment | null;
-  editForm: EquipmentFormState;
-  setEditForm: React.Dispatch<React.SetStateAction<EquipmentFormState>>;
-  onStartEdit: (item: CompanyEquipment) => void;
-  onCancelEdit: () => void;
-  onSubmitEdit: (event: React.FormEvent) => void;
-  onDeactivate: (item: CompanyEquipment) => void;
-  saving: boolean;
-}) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              <th className="px-5 py-3 text-left">Equipment</th>
-              <th className="px-4 py-3 text-left">Type</th>
-              <th className="px-4 py-3 text-left">Code / Plate</th>
-              <th className="px-4 py-3 text-left">Operator</th>
-              <th className="px-4 py-3 text-left">Branch</th>
-              {canManage && <th className="px-4 py-3 text-center w-24">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr><td colSpan={canManage ? 6 : 5} className="px-4 py-12 text-center text-slate-400">No company equipment found</td></tr>
-            ) : rows.map(item => (
-              editingEquipment?.id === item.id ? (
-                <tr key={item.id} className="bg-blue-50/60">
-                  <td className="px-5 py-3" colSpan={canManage ? 6 : 5}>
-                    <form onSubmit={onSubmitEdit} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
-                      <div className="md:col-span-2">
-                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Name</label>
-                        <input required value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Type</label>
-                        <select value={editForm.equipment_type} onChange={e => setEditForm(f => ({ ...f, equipment_type: e.target.value }))} className={inputClass}>
-                          {equipmentTypes.map(type => <option key={type} value={type}>{type}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Code / Plate</label>
-                        <input value={editForm.plate_or_code} onChange={e => setEditForm(f => ({ ...f, plate_or_code: e.target.value }))} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Operator</label>
-                        <input value={editForm.operator_name} onChange={e => setEditForm(f => ({ ...f, operator_name: e.target.value }))} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-slate-500 mb-1 block">Branch</label>
-                        <select value={editForm.branch_id} onChange={e => setEditForm(f => ({ ...f, branch_id: e.target.value }))} className={inputClass}>
-                          <option value="">All branches</option>
-                          {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.company_name} - {branch.name}</option>)}
-                        </select>
-                      </div>
-                      <div className="md:col-span-6 flex justify-end gap-2">
-                        <button type="button" onClick={onCancelEdit} className="px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50">Cancel</button>
-                        <button type="submit" disabled={saving} className="px-3 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-70">
-                          {saving ? 'Saving...' : 'Save'}
-                        </button>
-                      </div>
-                    </form>
-                  </td>
-                </tr>
-              ) : (
-                <tr key={item.id} className="hover:bg-slate-50 group">
-                  <td className="px-5 py-3 text-slate-800 font-semibold">
-                    {item.name}
-                    {item.notes && <p className="text-xs text-slate-400 font-normal mt-0.5">{item.notes}</p>}
-                  </td>
-                  <td className="px-4 py-3"><span className="inline-flex px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-xs font-semibold">{item.equipment_type}</span></td>
-                  <td className="px-4 py-3 text-slate-600 font-mono text-xs">{item.plate_or_code || '—'}</td>
-                  <td className="px-4 py-3 text-slate-600">{item.operator_name || '—'}</td>
-                  <td className="px-4 py-3 text-slate-500">{equipmentBranchLabel(item, branches)}</td>
-                  {canManage && (
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => onStartEdit(item)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors" title="Edit equipment">
-                          <Pencil size={14} />
-                        </button>
-                        <button onClick={() => onDeactivate(item)} disabled={saving} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50" title="Deactivate equipment">
-                          {saving ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              )
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function IssuancesTable({ rows, reversedIds, compact = false, canEdit = false, editingId, onEdit }: { rows: FuelIssuanceWithTarget[]; reversedIds?: Set<string>; compact?: boolean; canEdit?: boolean; editingId?: string; onEdit?: (issuance: FuelIssuanceWithTarget) => void }) {
-  const showEdit = canEdit && !compact && Boolean(onEdit);
-  return (
-    <div className={compact ? 'overflow-hidden' : 'bg-white rounded-xl border border-slate-200 overflow-hidden'}>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              <th className="px-5 py-3 text-left">Date</th>
-              <th className="px-4 py-3 text-left">Category</th>
-              <th className="px-4 py-3 text-left">Issued To</th>
-              <th className="px-4 py-3 text-left">Reference</th>
-              <th className="px-4 py-3 text-right">Liters</th>
-              <th className="px-4 py-3 text-right">Price / L</th>
-              <th className="px-4 py-3 text-right">Value</th>
-              {showEdit && <th className="px-3 py-3"><span className="sr-only">Edit</span></th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr><td colSpan={showEdit ? 8 : 7} className="px-4 py-12 text-center text-slate-400">No fuel issuances found</td></tr>
-            ) : rows.map(item => (
-              <tr key={item.id} className={`hover:bg-slate-50 ${reversedIds?.has(item.id) ? 'opacity-60' : ''}`}>
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
-                  {formatDate(item.issuance_date)}
-                  <EncodedNote transactionDate={item.issuance_date} createdAt={item.created_at} />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">{item.category}</span>
-                    {reversedIds?.has(item.id) && <ReversedBadge />}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-slate-800 font-medium">
-                  {item.issued_to}
-                  {item.trucks?.plate_number && <p className="text-xs text-slate-400 font-mono">{item.trucks.plate_number}</p>}
-                  {item.company_equipment && <p className="text-xs text-slate-400">{item.company_equipment.equipment_type}{item.company_equipment.plate_or_code ? ` / ${item.company_equipment.plate_or_code}` : ''}</p>}
-                </td>
-                <td className="px-4 py-3 text-slate-500 font-mono text-xs">{item.reference_no || '—'}</td>
-                <td className="px-4 py-3 text-right text-emerald-600 font-semibold tabular-nums">{fmt(item.liters)} L</td>
-                <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{currency(item.unit_cost_snapshot)}</td>
-                <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums">{currency(item.total_value)}</td>
-                {showEdit && (
-                  <td className="px-3 py-3 text-center">
-                    {!reversedIds?.has(item.id) && <EditRowButton active={editingId === item.id} onClick={() => onEdit?.(item)} />}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function HistoryTable({ rows, reversedLedgerIds, showEncoded = false, canAdjust, onReverse, saving }: { rows: FuelInventoryLedger[]; reversedLedgerIds: Set<string>; showEncoded?: boolean; canAdjust: boolean; onReverse: (item: FuelInventoryLedger) => void; saving: boolean }) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              <th className="px-5 py-3 text-left">Date</th>
-              <th className="px-4 py-3 text-left">Type</th>
-              <th className="px-4 py-3 text-left">Description</th>
-              <th className="px-4 py-3 text-right">Liters</th>
-              <th className="px-4 py-3 text-right">Value</th>
-              <th className="px-4 py-3 text-right">Balance</th>
-              {canAdjust && <th className="px-4 py-3 text-center">Action</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr><td colSpan={canAdjust ? 7 : 6} className="px-4 py-12 text-center text-slate-400">No inventory movement found</td></tr>
-            ) : rows.map(item => (
-              <tr key={item.id} className={`hover:bg-slate-50 ${reversedLedgerIds.has(item.id) ? 'opacity-60' : ''}`}>
-                <td className="px-5 py-3 whitespace-nowrap text-slate-600">
-                  {formatDate(item.movement_date)}
-                  <EncodedNote transactionDate={item.movement_date} createdAt={item.created_at} always={showEncoded} />
-                </td>
-                <td className="px-4 py-3"><span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-semibold ${movementBadge(item.movement_type)}`}>{item.movement_type.replace('_', ' ')}</span></td>
-                <td className="px-4 py-3 text-slate-800 font-medium">
-                  {item.description || '—'}
-                  <p className="text-xs text-slate-400 font-mono">{item.reference_no || 'No reference'}</p>
-                </td>
-                <td className={`px-4 py-3 text-right font-semibold tabular-nums ${item.liters_delta >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>{fmt(item.liters_delta)} L</td>
-                <td className={`px-4 py-3 text-right tabular-nums ${item.value_delta >= 0 ? 'text-slate-700' : 'text-orange-600'}`}>{currency(item.value_delta)}</td>
-                <td className="px-4 py-3 text-right text-slate-800 font-bold tabular-nums whitespace-nowrap">
-                  {fmt(item.balance_liters_after)} L
-                  <p className="text-[11px] font-normal text-slate-400">from {fmt(Number(item.balance_liters_after) - Number(item.liters_delta))} L</p>
-                </td>
-                {canAdjust && (
-                  <td className="px-4 py-3 text-center">
-                    {reversedLedgerIds.has(item.id) ? (
-                      <ReversedBadge />
-                    ) : item.source_table === 'fuel_purchase_edits' || item.source_table === 'fuel_issuance_edits' ? (
-                      <span className="text-xs text-slate-400" title="Edit correction. Reverse the original purchase/issuance instead.">Edit</span>
-                    ) : item.movement_type !== 'REVERSAL' && !item.reversal_of_ledger_id ? (
-                      <button disabled={saving} onClick={() => onReverse(item)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold disabled:opacity-60">
-                        Reverse
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-400">—</span>
-                    )}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

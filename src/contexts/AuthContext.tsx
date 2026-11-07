@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { withTimeout } from '../lib/withTimeout';
 import type { ActivityCode, AppUser, UserRole } from '../lib/database.types';
 
 interface AuthContextType {
@@ -11,6 +12,7 @@ interface AuthContextType {
   permissions: Set<ActivityCode>;
   isManager: boolean;
   loading: boolean;
+  authError: string | null;
   can: (activityCode: ActivityCode) => boolean;
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
@@ -26,98 +28,104 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [permissions, setPermissions] = useState<Set<ActivityCode>>(new Set());
   const [loading, setLoading] = useState(true);
 
-  const loadPermissions = useCallback(async () => {
-    const { data, error } = await supabase.rpc('get_my_activity_codes');
-
-    if (error) {
-      setPermissions(new Set());
-      return;
-    }
-
-    setPermissions(new Set((data ?? []) as ActivityCode[]));
-  }, []);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const requestId = useRef(0);
+  const invalidateProfileRequest = useCallback(() => { requestId.current++; }, []);
 
   const loadProfile = useCallback(async (userId: string | undefined) => {
+    const currentRequest = ++requestId.current;
     if (!userId) {
       setProfile(null);
       setPermissions(new Set());
+      setAuthError(null);
+      setLoading(false);
       return;
     }
 
-    const { data } = await supabase
-      .from('app_users')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
+    try {
+      // Fetch data without changing state until the complete request succeeds.
+      const result = await withTimeout((async () => {
+        const { data, error } = await supabase.from('app_users')
+          .select('*').eq('id', userId).maybeSingle();
+        if (error) throw error;
 
-    if (data) {
-      const appUser = data as AppUser;
-      setProfile(appUser);
-      await loadPermissions();
-      return;
-    }
+        let appUser = data as AppUser | null;
+        if (!appUser) {
+          const { data: created, error: rpcError } = await supabase.rpc('ensure_user_profile');
+          if (rpcError) throw rpcError;
+          appUser = (created ?? null) as AppUser | null;
+        }
+        if (!appUser) throw new Error('Your user profile could not be loaded.');
 
-    // Profile not found – user pre-dates the roles migration or trigger missed them.
-    // Auto-register via SECURITY DEFINER RPC (first caller becomes manager).
-    const { data: created, error: rpcError } = await supabase.rpc('ensure_user_profile');
-    if (!rpcError) {
-      const appUser = (created ?? null) as AppUser | null;
-      setProfile(appUser);
-      await loadPermissions();
-    } else {
-      console.error('ensure_user_profile RPC failed:', rpcError.message);
+        const { data: codes, error: permissionsError } = await supabase.rpc('get_my_activity_codes');
+        if (permissionsError) throw permissionsError;
+        return { appUser, codes: (codes ?? []) as ActivityCode[] };
+      })(), 15000);
+
+      if (currentRequest !== requestId.current) return;
+      setProfile(result.appUser);
+      setPermissions(new Set(result.codes));
+      setAuthError(null);
+    } catch (error) {
+      if (currentRequest !== requestId.current) return;
+      console.error('Unable to load account access:', error);
       setProfile(null);
       setPermissions(new Set());
+      setAuthError('Unable to load your account access. Check your connection and try again.');
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false);
     }
-  }, [loadPermissions]);
+  }, []);
 
   useEffect(() => {
-    let active = true;
-
-    async function initialize() {
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (!active) return;
-
-      setSession(currentSession);
-      await loadProfile(currentSession?.user.id);
-      if (active) setLoading(false);
-    }
-
-    initialize();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    // Auth callbacks only publish session state. Database calls run in the
+    // separate effect below, after Supabase releases its auth lock.
+    const timeout = window.setTimeout(() => {
+      setAuthError('Your session is taking too long to load. Check your connection and try again.');
+      setLoading(false);
+    }, 15000);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      window.clearTimeout(timeout);
       setSession(nextSession);
-      setLoading(true);
-      loadProfile(nextSession?.user.id).finally(() => {
-        if (active) setLoading(false);
-      });
+      setSessionReady(true);
     });
-
     return () => {
-      active = false;
+      window.clearTimeout(timeout);
       subscription.unsubscribe();
+      invalidateProfileRequest();
     };
-  }, [loadProfile]);
+  }, [invalidateProfileRequest]);
+
+  const userId = session?.user.id;
+  useEffect(() => {
+    if (!sessionReady) return;
+    setProfile(null);
+    setPermissions(new Set());
+    setLoading(true);
+    void loadProfile(userId);
+    return invalidateProfileRequest;
+  }, [invalidateProfileRequest, loadProfile, sessionReady, userId]);
 
   useEffect(() => {
-    if (!session?.user.id) return;
-
+    if (!userId) return;
+    // Focus and visibilitychange commonly fire together. Coalesce them without
+    // hiding the current page or discarding an unsaved form.
+    let timeout: number | undefined;
     const refreshCurrentUser = () => {
+      window.clearTimeout(timeout);
       if (document.visibilityState === 'visible') {
-        loadProfile(session.user.id);
+        timeout = window.setTimeout(() => { void loadProfile(userId); }, 100);
       }
     };
-
     window.addEventListener('focus', refreshCurrentUser);
     document.addEventListener('visibilitychange', refreshCurrentUser);
-
     return () => {
+      window.clearTimeout(timeout);
       window.removeEventListener('focus', refreshCurrentUser);
       document.removeEventListener('visibilitychange', refreshCurrentUser);
     };
-  }, [loadProfile, session?.user.id]);
+  }, [loadProfile, userId]);
 
   const signUp = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
@@ -150,12 +158,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     permissions,
     isManager: permissions.has('USER_GROUP_ACCESS_MANAGE'),
     loading,
+    authError,
     can,
     signUp,
     signIn,
     signOut,
     refreshProfile,
-  }), [can, loading, permissions, profile, refreshProfile, session, signIn, signOut, signUp]);
+  }), [authError, can, loading, permissions, profile, refreshProfile, session, signIn, signOut, signUp]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

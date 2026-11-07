@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, RefreshCw, Trash2, Droplet, Calendar, Filter } from 'lucide-react';
+import { Search, RefreshCw, Trash2, Droplet, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { friendlyDbError, loadErrorMessage } from '../lib/dbErrors';
 import { fetchAllPages } from '../lib/fetchAll';
@@ -7,6 +7,7 @@ import type { ExpenseWithCategory } from '../lib/database.types';
 import Pagination from './Pagination';
 import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
+import CategoryMultiSelect from './CategoryMultiSelect';
 import DateRangeFilter from './DateRangeFilter';
 import { isWithinRange, useDateRange } from '../lib/dateRange';
 
@@ -16,7 +17,10 @@ export interface ExpenseLedgerFilterState {
   /** True when any filter (category, dates or search) is applied. */
   active: boolean;
   filtered: ExpenseWithCategory[];
+  /** Selected categories joined for labels (e.g. "Diesel, Passway"), or null for all. */
   category: string | null;
+  /** Selected category names; empty means all categories. */
+  categories: string[];
   dateLabel: string;
   search: string;
 }
@@ -52,7 +56,7 @@ export default function ExpensesLedger({ onFilterChange, refreshKey = 0, expense
   const [internalExpenses, setInternalExpenses] = useState<ExpenseWithCategory[]>([]);
   const [internalLoading, setInternalLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [allCategoryNames, setAllCategoryNames] = useState<string[]>([]);
   const dates = useDateRange();
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -143,34 +147,40 @@ export default function ExpensesLedger({ onFilterChange, refreshKey = 0, expense
     return [...counts.entries()].sort((a, b) => (b[1] > 0 ? 1 : 0) - (a[1] > 0 ? 1 : 0) || a[0].localeCompare(b[0]));
   }, [allCategoryNames, expenses]);
 
-  // Reset the filter if the selected category no longer exists (e.g. after a refresh).
+  // Drop selected categories that no longer exist (e.g. after a refresh).
   useEffect(() => {
-    if (categoryFilter !== 'ALL' && !categoryOptions.some(([name]) => name === categoryFilter)) setCategoryFilter('ALL');
+    const known = new Set(categoryOptions.map(([name]) => name));
+    if (categoryFilter.some(name => !known.has(name))) setCategoryFilter(previous => previous.filter(name => known.has(name)));
   }, [categoryFilter, categoryOptions]);
 
   const dateFilterActive = dates.active;
   const dateLabel = dates.label;
 
-  const filtered = useMemo(() => expenses.filter(e => {
-    const categoryName = e.expense_categories?.name ?? 'Uncategorized';
-    if (categoryFilter !== 'ALL' && categoryName !== categoryFilter) return false;
-    if (!isWithinRange(e.expense_date, dates.start, dates.end)) return false;
+  const filtered = useMemo(() => {
+    const selectedCategories = new Set(categoryFilter);
     const q = search.toLowerCase();
-    return !q || categoryName.toLowerCase().includes(q) ||
-      e.payee_supplier.toLowerCase().includes(q) ||
-      e.description.toLowerCase().includes(q);
-  }), [categoryFilter, dates.end, dates.start, expenses, search]);
-  const filtersActive = categoryFilter !== 'ALL' || search.trim() !== '' || dateFilterActive;
+    return expenses.filter(e => {
+      const categoryName = e.expense_categories?.name ?? 'Uncategorized';
+      if (selectedCategories.size > 0 && !selectedCategories.has(categoryName)) return false;
+      if (!isWithinRange(e.expense_date, dates.start, dates.end)) return false;
+      return !q || categoryName.toLowerCase().includes(q) ||
+        e.payee_supplier.toLowerCase().includes(q) ||
+        e.description.toLowerCase().includes(q);
+    });
+  }, [categoryFilter, dates.end, dates.start, expenses, search]);
+  const filtersActive = categoryFilter.length > 0 || search.trim() !== '' || dateFilterActive;
+  const categoryLabel = categoryFilter.join(', ');
 
   useEffect(() => {
     onFilterChange?.({
       active: filtersActive,
       filtered,
-      category: categoryFilter === 'ALL' ? null : categoryFilter,
+      category: categoryFilter.length === 0 ? null : categoryLabel,
+      categories: categoryFilter,
       dateLabel,
       search: search.trim(),
     });
-  }, [categoryFilter, dateLabel, filtered, filtersActive, onFilterChange, search]);
+  }, [categoryFilter, categoryLabel, dateLabel, filtered, filtersActive, onFilterChange, search]);
   const filteredTotal = filtered.reduce((sum, e) => sum + Number(e.amount ?? 0), 0);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -204,23 +214,12 @@ export default function ExpensesLedger({ onFilterChange, refreshKey = 0, expense
             className="w-full pl-9 pr-4 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 bg-white"
           />
         </div>
-        <div className="relative sm:w-64">
-          <Filter size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <select
-            value={categoryFilter}
-            onChange={e => setCategoryFilter(e.target.value)}
-            aria-label="Filter by category"
-            className={`w-full appearance-none pl-9 pr-8 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 bg-white ${
-              categoryFilter === 'ALL' ? 'border-slate-200 text-slate-600' : 'border-emerald-300 text-emerald-700 font-medium'
-            }`}
-          >
-            <option value="ALL">All categories ({expenses.length})</option>
-            {categoryOptions.map(([name, count]) => (
-              <option key={name} value={name}>{name} ({count})</option>
-            ))}
-          </select>
-          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">▾</span>
-        </div>
+        <CategoryMultiSelect
+          options={categoryOptions}
+          selected={categoryFilter}
+          totalCount={expenses.length}
+          onChange={setCategoryFilter}
+        />
       </div>
 
       <DateRangeFilter range={dates} />
@@ -229,13 +228,13 @@ export default function ExpensesLedger({ onFilterChange, refreshKey = 0, expense
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-4 py-2.5 text-sm">
           <span className="text-slate-600">
             {filtered.length} {filtered.length === 1 ? 'expense' : 'expenses'}
-            {categoryFilter !== 'ALL' && <> in <span className="font-semibold text-slate-800">{categoryFilter}</span></>}
+            {categoryFilter.length > 0 && <> in <span className="font-semibold text-slate-800">{categoryLabel}</span></>}
             {dateFilterActive && <> · <span className="font-semibold text-slate-800">{dateLabel}</span></>}
             {' · '}Total <span className="font-bold text-slate-800">₱{fmt(filteredTotal)}</span>
           </span>
           <button
             type="button"
-            onClick={() => { setCategoryFilter('ALL'); setSearch(''); dates.applyPreset('ALL'); }}
+            onClick={() => { setCategoryFilter([]); setSearch(''); dates.applyPreset('ALL'); }}
             className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
           >
             Clear filters

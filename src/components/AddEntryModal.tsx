@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Wallet, Clock3 } from 'lucide-react';
+import { X, Calculator, Loader2, CheckCircle, PlusCircle, Trash2, ImagePlus, AlertTriangle, Clock3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { friendlyDbError, isNetworkError, loadErrorMessage, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
 import { fetchAllPages } from '../lib/fetchAll';
 import type { Customer, CustomerCreditEntry, Truck, Pricing, PaymentMode, TransactionStatus, TransactionWithRelations } from '../lib/database.types';
+import CustomerCreditBalanceNotice from './CustomerCreditBalanceNotice';
 import { PAYMENT_MODES, SPLIT_PAYMENT_MODES, type SplitPaymentMode } from '../lib/payment';
 
 interface AddEntryModalProps {
@@ -356,8 +357,6 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     : form.payment_mode === 'SPLIT'
       ? form.split_payment_details.reduce((sum, detail) => detail.mode === 'CUSTOMER_CREDIT' ? sum + (Number(detail.amount) || 0) : sum, 0)
       : 0;
-  const customerCreditShortfallFor = (balance: number) => selectedCustomerCreditAmount > balance + SPLIT_AMOUNT_TOLERANCE;
-  const hasCustomerCreditShortfall = customerCreditShortfallFor(customerCreditBalance);
 
   const setHeader = (key: keyof Omit<FormData, 'products' | 'split_payment_details'>, val: string) => {
     setForm(f => ({ ...f, [key]: val }));
@@ -492,9 +491,8 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
     setHeaderErrors(e => ({ ...e, truck_id: undefined }));
   };
 
-  function validate(creditBalance = customerCreditBalance) {
+  function validate() {
     let valid = true;
-    const hasCreditShortfall = customerCreditShortfallFor(creditBalance);
     const hErrs: Partial<Record<'customer_id' | 'truck_id', string>> = {};
     if (!form.customer_id) { hErrs.customer_id = 'Required'; valid = false; }
     if (!form.truck_id) { hErrs.truck_id = 'Required'; valid = false; }
@@ -526,20 +524,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
         } else if (Math.abs(round2(totalSplitAmount) - round2(grandTotal)) > SPLIT_AMOUNT_TOLERANCE) {
           setSplitPaymentError(`Split payment amounts must total ₱${fmt(grandTotal)}.`);
           valid = false;
-        } else if (selectedCustomerCreditAmount > 0 && hasCreditShortfall) {
-          setSplitPaymentError(`Customer Credit for ${selectedCustomerLabel} exceeds available balance of PHP ${fmt(creditBalance)}.`);
-          valid = false;
         } else {
           setSplitPaymentError(null);
         }
       }
     } else {
       setSplitPaymentError(null);
-    }
-
-    if (form.payment_mode === 'CUSTOMER_CREDIT' && hasCreditShortfall) {
-      setSaveError(`Insufficient customer credit balance for ${selectedCustomerLabel}. Available: PHP ${fmt(creditBalance)}, required: PHP ${fmt(selectedCustomerCreditAmount)}.`);
-      valid = false;
     }
 
     return valid;
@@ -689,13 +679,12 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    let validationCreditBalance = customerCreditBalance;
     if (form.customer_id && selectedCustomerCreditAmount > 0) {
       setCustomerCreditLoading(true);
       setCustomerCreditError(null);
       try {
-        validationCreditBalance = await loadCustomerCreditBalance(form.customer_id);
-        setCustomerCreditBalance(validationCreditBalance);
+        const latestCreditBalance = await loadCustomerCreditBalance(form.customer_id);
+        setCustomerCreditBalance(latestCreditBalance);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to load customer credit balance.';
         setCustomerCreditError(message);
@@ -706,7 +695,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
       setCustomerCreditLoading(false);
     }
 
-    if (!validate(validationCreditBalance)) return;
+    if (!validate()) return;
     if (hasZeroUnitPrice) {
       setShowZeroPriceWarning(true);
       return;
@@ -717,7 +706,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
   const fmt = (v: number) => v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const paymentModes: PaymentMode[] = [...PAYMENT_MODES];
-  const customerCreditUnavailableForFullPayment = !form.customer_id || hasCustomerCreditShortfall || customerCreditBalance <= 0;
+  const customerCreditUnavailableForFullPayment = !form.customer_id;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -755,7 +744,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
                   const creditBalance = customerCreditBalances[c.id] ?? 0;
                   return (
                     <option key={c.id} value={c.id}>
-                      {c.name}{creditBalance > 0 ? ` - Credit PHP ${fmt(creditBalance)}` : ''}
+                      {c.name}{creditBalance !== 0 ? ` - Credit PHP ${fmt(creditBalance)}` : ''}
                     </option>
                   );
                 })}
@@ -801,17 +790,13 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
           </Field>
 
           {form.customer_id && (
-            <div className={`rounded-xl border px-4 py-3 text-sm ${hasCustomerCreditShortfall ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-100 bg-emerald-50 text-emerald-800'}`}>
-              <div className="flex items-center gap-2">
-                <Wallet size={16} />
-                <span className="font-semibold">Customer Credit Balance for {selectedCustomerLabel}:</span>
-                <span className="font-bold tabular-nums">{customerCreditLoading ? 'Loading...' : `PHP ${fmt(customerCreditBalance)}`}</span>
-              </div>
-              {customerCreditError && <p className="text-xs mt-1 text-red-600">{customerCreditError}</p>}
-              {hasCustomerCreditShortfall && (
-                <p className="text-xs mt-1">Insufficient balance for the selected customer credit amount. Use P.O, cash, or another mode instead.</p>
-              )}
-            </div>
+            <CustomerCreditBalanceNotice
+              customerName={selectedCustomerLabel}
+              balance={customerCreditBalance}
+              paymentAmount={selectedCustomerCreditAmount}
+              loading={customerCreditLoading}
+              error={customerCreditError}
+            />
           )}
 
           {form.payment_mode === 'SPLIT' && (
@@ -820,7 +805,7 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
               <div className="flex gap-2 flex-wrap">
                 {splitModes.map(mode => {
                   const active = form.split_payment_details.some(detail => detail.mode === mode);
-                  const disabled = mode === 'CUSTOMER_CREDIT' && !active && (!form.customer_id || customerCreditBalance <= 0);
+                  const disabled = mode === 'CUSTOMER_CREDIT' && !active && !form.customer_id;
                   return (
                     <button
                       key={mode}
@@ -857,7 +842,6 @@ export default function AddEntryModal({ onClose, onSuccess, transaction, canUplo
                       <input
                         type="number"
                         min="0"
-                        max={detail.mode === 'CUSTOMER_CREDIT' ? customerCreditBalance : undefined}
                         step="0.01"
                         value={detail.amount}
                         onChange={e => setSplitAmount(detail.mode, e.target.value)}

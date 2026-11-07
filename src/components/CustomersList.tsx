@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { UserPlus, Search, RefreshCw, Users, Building2, Phone, MapPin, X, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { friendlyDbError, loadErrorMessage, NOT_SAVED_MESSAGE } from '../lib/dbErrors';
-import { fetchAllPages } from '../lib/fetchAll';
+import { EMPTY_CUSTOMER_PAGE, type CustomerPage } from '../lib/listPages';
+import { useAsyncQuery, useDebouncedValue } from '../lib/useAsyncQuery';
 import type { Customer } from '../lib/database.types';
 import ReadOnlyNotice from './ReadOnlyNotice';
 import Pagination from './Pagination';
-import { paginate } from '../lib/pagination';
 import ActionModal from './ActionModal';
 
 const PAGE_SIZE = 12;
@@ -18,8 +18,6 @@ interface CustomersListProps {
 }
 
 export default function CustomersList({ canAdd = false, canEdit = false, canDelete = false }: CustomersListProps) {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', contact: '', address: '' });
@@ -35,19 +33,19 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
   const [page, setPage] = useState(1);
   const canManage = canAdd || canEdit || canDelete;
 
-  useEffect(() => { fetchCustomers(); }, []);
-  useEffect(() => { setPage(1); }, [search]);
-
-  async function fetchCustomers() {
-    setLoading(true);
-    const { data, error } = await fetchAllPages<Customer>(async (from, to) => {
-      const page = await supabase.from('customers').select('*').order('name').order('id').range(from, to);
-      return { data: page.data as Customer[] | null, error: page.error };
-    });
-    if (error) setSaveError(loadErrorMessage('customers', error));
-    setCustomers((data ?? []) as Customer[]);
-    setLoading(false);
-  }
+  const debouncedSearch = useDebouncedValue(search);
+  const query = useCallback(async (signal: AbortSignal) => {
+    const { data, error } = await supabase.rpc('get_customer_page', { p_search: debouncedSearch, p_page: page, p_page_size: PAGE_SIZE }).abortSignal(signal);
+    if (error) throw new Error(loadErrorMessage('customers', error));
+    if (!data) throw new Error('No customer response was returned.');
+    return data as unknown as CustomerPage;
+  }, [debouncedSearch, page]);
+  const { data: customerPage, loading: queryLoading, error: loadError, refresh: fetchCustomers } = useAsyncQuery(query, EMPTY_CUSTOMER_PAGE);
+  const loading = queryLoading || search !== debouncedSearch;
+  const pagedCustomers = customerPage.rows;
+  const currentPage = customerPage.page;
+  const totalCount = customerPage.total_count;
+  const registeredCount = customerPage.registered_count;
 
   // Blocks double-submit (double click / Enter pressed twice) while a save is in progress.
   const handleAddInFlight = useRef(false);
@@ -70,7 +68,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
         return;
       }
       if (data) {
-        setCustomers(prev => [...prev, data as Customer].sort((a, b) => a.name.localeCompare(b.name)));
+        fetchCustomers();
         setForm({ name: '', contact: '', address: '' });
         setShowForm(false);
         setErrors({});
@@ -112,10 +110,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
       return;
     }
     if (data) {
-      setCustomers(prev =>
-        prev.map(c => c.id === editingCustomer!.id ? data as Customer : c)
-            .sort((a, b) => a.name.localeCompare(b.name))
-      );
+      fetchCustomers();
       setEditingCustomer(null);
     }
   }
@@ -134,24 +129,17 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
       setDeletingId(null);
       return;
     }
-    setCustomers(prev => prev.filter(c => c.id !== deleteTarget.id));
+    fetchCustomers();
     setDeleteTarget(null);
     setDeletingId(null);
   }
-
-  const filtered = customers.filter(c =>
-    !search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.contact ?? '').includes(search)
-  );
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pagedCustomers = useMemo(() => paginate(filtered, currentPage, PAGE_SIZE), [filtered, currentPage]);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Customers</h1>
-          <p className="text-slate-500 text-sm mt-0.5">{customers.length} registered customer{customers.length !== 1 ? 's' : ''}</p>
+          <p className="text-slate-500 text-sm mt-0.5">{loading ? 'Loading customer count…' : `${registeredCount} registered customer${registeredCount !== 1 ? 's' : ''}`} </p>
         </div>
         {canAdd && (
           <button
@@ -164,6 +152,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
         )}
       </div>
 
+      {loadError && <div role="alert" className="flex justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><span>{loadError}</span><button onClick={fetchCustomers} className="font-semibold underline">Retry</button></div>}
       {!canManage && <ReadOnlyNotice message="This user group can search and review customer records only." />}
 
       {showForm && canAdd && (
@@ -213,14 +202,16 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
 
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
+        <input type="text" placeholder="Search customers..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white" />
       </div>
 
       {loading ? (
         <div className="py-16 flex items-center justify-center text-slate-400 text-sm gap-2">
           <RefreshCw size={16} className="animate-spin" /> Loading...
         </div>
-      ) : filtered.length === 0 ? (
+      ) : loadError ? (
+        <p className="py-12 text-center text-sm text-slate-500">Customer records are unavailable. Use Retry above.</p>
+      ) : totalCount === 0 ? (
         <div className="py-16 text-center bg-white rounded-xl border border-slate-200">
           <Users size={32} className="text-slate-300 mx-auto mb-3" />
           <p className="text-slate-500 text-sm">No customers found</p>
@@ -309,7 +300,7 @@ export default function CustomersList({ canAdd = false, canEdit = false, canDele
             </div>
           ))}
           <div className="md:col-span-2 xl:col-span-3">
-            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={filtered.length} onPageChange={setPage} />
+            <Pagination page={currentPage} pageSize={PAGE_SIZE} totalItems={totalCount} onPageChange={setPage} />
           </div>
         </div>
       )}

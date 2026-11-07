@@ -6,6 +6,7 @@ export type PaymentMode = 'CASH' | 'P.O' | 'OFFSET' | 'GCASH' | 'BANK_TRANSFER' 
 export type TransactionStatus = 'PENDING' | 'PAID';
 export type ActivityCode =
   | 'DASHBOARD_VIEW'
+  | 'RECONCILIATION_VIEW'
   | 'DAILY_LEDGER_VIEW'
   | 'DAILY_LEDGER_ADD'
   | 'DAILY_LEDGER_EDIT'
@@ -75,7 +76,200 @@ export type ActivityCode =
   | 'USER_ACCOUNTS_MANAGE'
   | 'USER_GROUP_ACCESS_VIEW'
   | 'USER_GROUP_ACCESS_MANAGE'
-  | 'AUDIT_LOG_VIEW';
+  | 'AUDIT_LOG_VIEW'
+  | 'WF_EMPLOYEES_VIEW'
+  | 'WF_EMPLOYEES_MANAGE'
+  | 'WF_ATTENDANCE_VIEW'
+  | 'WF_ATTENDANCE_IMPORT'
+  | 'WF_ATTENDANCE_ADJUST'
+  | 'WF_PAYROLL_VIEW'
+  | 'WF_PAYROLL_MANAGE'
+  | 'WF_PAYROLL_LOCK'
+  | 'WF_CASH_ADVANCE_VIEW'
+  | 'WF_CASH_ADVANCE_MANAGE'
+  | 'WF_SETTINGS_MANAGE';
+
+/** Supabase table typing for the Workforce module: Row, Insert (required keys + optional rest), Update. */
+type WfTable<Row, Required extends keyof Row> = {
+  Row: Row;
+  Insert: Partial<Row> & Pick<Row, Required>;
+  Update: Partial<Row>;
+  Relationships: [];
+};
+
+export type WfSettingsRow = {
+  id: string;
+  singleton: boolean;
+  ot_multiplier: number;
+  nd_rate: number;
+  nd_start: string;
+  nd_end: string;
+  special_holiday_premium: number;
+  punch_dedupe_minutes: number;
+  min_daily_wage: number;
+  default_shift_id: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfShiftRow = {
+  id: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  break_start: string;
+  break_minutes: number;
+  half_day_min_hours: number;
+  ot_rounding: 'nearest_hour' | 'floor_hour' | 'floor_half_hour' | 'exact';
+  crosses_midnight: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfEmployeeRow = {
+  id: string;
+  biometric_id: string;
+  full_name: string;
+  department: string;
+  position: string;
+  status: 'active' | 'inactive';
+  pay_type: 'daily' | 'fixed';
+  ot_eligible: boolean;
+  shift_id: string | null;
+  ca_deduction_per_payroll: number;
+  notes: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfEmployeeRateRow = {
+  id: string;
+  employee_id: string;
+  daily_rate: number;
+  effective_from: string;
+  notes: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfHolidayRow = {
+  id: string;
+  holiday_date: string;
+  name: string;
+  type: 'regular' | 'special';
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfAttendanceImportRow = {
+  id: string;
+  file_name: string;
+  file_sha256: string;
+  date_from: string | null;
+  date_to: string | null;
+  page_count: number;
+  unparsed_pages: number;
+  employee_count: number;
+  employees_created: number;
+  punch_count: number;
+  punches_inserted: number;
+  imported_by: string | null;
+  created_at: string;
+};
+
+export type WfPunchRow = {
+  id: string;
+  employee_id: string;
+  punched_at: string;
+  import_id: string | null;
+  source: 'pdf';
+  created_at: string;
+};
+
+export type WfTimecardOverrideRow = {
+  id: string;
+  employee_id: string;
+  work_date: string;
+  days_credit: number | null;
+  ot_hours: number | null;
+  nd_hours: number | null;
+  reason: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfPayrollPeriodRow = {
+  id: string;
+  date_from: string;
+  date_to: string;
+  status: 'draft' | 'locked';
+  rules_snapshot: Json;
+  expense_id: string | null;
+  locked_by: string | null;
+  locked_at: string | null;
+  notes: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WfPayrollLineRow = {
+  id: string;
+  period_id: string;
+  employee_id: string;
+  employee_name: string;
+  biometric_id: string;
+  pay_type: 'daily' | 'fixed';
+  daily_rate: number;
+  days: number;
+  ot_hours: number;
+  nd_hours: number;
+  reg_holidays: number;
+  special_holidays_worked: number;
+  basic_pay: number;
+  ot_pay: number;
+  nd_pay: number;
+  holiday_pay: number;
+  gross_pay: number;
+  ca_deduction: number;
+  sss: number;
+  philhealth: number;
+  pagibig: number;
+  other_deductions: number;
+  net_pay: number;
+  remarks: string;
+  created_at: string;
+};
+
+export type WfCashAdvanceEntryRow = {
+  id: string;
+  employee_id: string;
+  entry_date: string;
+  type: 'advance' | 'deduction' | 'adjustment';
+  amount: number;
+  payroll_period_id: string | null;
+  description: string;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type WfEmployeeCurrentRateRow = {
+  employee_id: string;
+  daily_rate: number;
+  effective_from: string;
+};
+
+export type WfCashAdvanceBalanceRow = {
+  employee_id: string;
+  balance: number;
+  last_entry_date: string;
+  entry_count: number;
+};
 
 export type Database = {
   public: {
@@ -1386,9 +1580,65 @@ export type Database = {
         };
         Relationships: [];
       };
+      wf_settings: WfTable<WfSettingsRow, never>;
+      wf_shifts: WfTable<WfShiftRow, 'name'>;
+      wf_employees: WfTable<WfEmployeeRow, 'biometric_id' | 'full_name'>;
+      wf_employee_rates: WfTable<WfEmployeeRateRow, 'employee_id' | 'daily_rate' | 'effective_from'>;
+      wf_holidays: WfTable<WfHolidayRow, 'holiday_date' | 'name' | 'type'>;
+      wf_attendance_imports: WfTable<WfAttendanceImportRow, 'file_name' | 'file_sha256'>;
+      wf_punches: WfTable<WfPunchRow, 'employee_id' | 'punched_at'>;
+      wf_timecard_overrides: WfTable<WfTimecardOverrideRow, 'employee_id' | 'work_date' | 'reason'>;
+      wf_payroll_periods: WfTable<WfPayrollPeriodRow, 'date_from' | 'date_to'>;
+      wf_payroll_lines: WfTable<WfPayrollLineRow, 'period_id' | 'employee_id' | 'employee_name'>;
+      wf_cash_advance_entries: WfTable<WfCashAdvanceEntryRow, 'employee_id' | 'entry_date' | 'type' | 'amount'>;
     };
-    Views: Record<string, never>;
+    Views: {
+      wf_employee_current_rates: { Row: WfEmployeeCurrentRateRow; Relationships: [] };
+      wf_cash_advance_balances: { Row: WfCashAdvanceBalanceRow; Relationships: [] };
+    };
     Functions: {
+      wf_import_punches: {
+        Args: {
+          p_file_name: string;
+          p_file_sha256: string;
+          p_records: Json;
+          p_page_count?: number;
+          p_unparsed_pages?: number;
+        };
+        Returns: Json;
+      };
+      wf_save_payroll_lines: {
+        Args: { p_period_id: string; p_lines: Json; p_rules_snapshot?: Json };
+        Returns: number;
+      };
+      wf_lock_payroll: {
+        Args: { p_period_id: string };
+        Returns: WfPayrollPeriodRow;
+      };
+      wf_unlock_payroll: {
+        Args: { p_period_id: string };
+        Returns: WfPayrollPeriodRow;
+      };
+      get_sales_dashboard: {
+        Args: { p_from?: string; p_to?: string };
+        Returns: Json;
+      };
+      get_daily_sales_insights: {
+        Args: { p_date: string };
+        Returns: Json;
+      };
+      get_daily_ledger_page: {
+        Args: { p_date: string; p_search?: string; p_payment_mode?: string; p_material_type?: string; p_page?: number; p_page_size?: number };
+        Returns: Json;
+      };
+      get_customer_page: {
+        Args: { p_search?: string; p_page?: number; p_page_size?: number };
+        Returns: Json;
+      };
+      get_daily_reconciliation: {
+        Args: { p_date: string };
+        Returns: Json;
+      };
       assign_user_group: {
         Args: {
           p_user_id: string;

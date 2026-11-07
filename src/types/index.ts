@@ -1,5 +1,6 @@
 export type NavSection =
   | 'dashboard'
+  | 'reconciliation'
   | 'daily-add'
   | 'daily-view'
   | 'customers-list'
@@ -15,6 +16,11 @@ export type NavSection =
   | 'operations-sand-washing'
   | 'operations-quarry-site'
   | 'operations-wobbler'
+  | 'workforce-employees'
+  | 'workforce-attendance'
+  | 'workforce-payroll'
+  | 'workforce-cash-advances'
+  | 'workforce-settings'
   | 'reports'
   | 'access-control';
 

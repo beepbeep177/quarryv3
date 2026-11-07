@@ -1,43 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
 import { LogOut } from 'lucide-react';
-import Sidebar from './components/Sidebar';
-import Dashboard from './components/Dashboard';
-import DailyLedger from './components/DailyLedger';
-import AddEntryModal from './components/AddEntryModal';
-import CustomersList from './components/CustomersList';
-import AccountsReceivable from './components/AccountsReceivable';
-import TruckList from './components/TruckList';
-import PricingList from './components/PricingList';
-import Expenses from './components/Expenses';
-import FuelManagement from './components/FuelManagement';
-import HaulerOffsetLedger from './components/HaulerOffsetLedger';
-import StoneCrusherOperations from './components/StoneCrusherOperations';
-import SandWashingOperations from './components/SandWashingOperations';
-import QuarrySiteOperations from './components/QuarrySiteOperations';
-import WobblerOperations from './components/WobblerOperations';
-import OperationsDashboard from './components/OperationsDashboard';
-import Reports from './components/Reports';
-import AccessControl from './components/AccessControl';
-import AuthPage from './pages/AuthPage';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import AppSections from './components/AppSections';
 import ErrorBoundary from './components/ErrorBoundary';
+import ModuleLoading from './components/ModuleLoading';
+import type { ReportTab } from './components/reports/types';
+import Sidebar from './components/Sidebar';
 import { useAuth } from './contexts/AuthContext';
-import type { NavSection } from './types';
 import type { TransactionWithRelations } from './lib/database.types';
-import type { ReportTab } from './components/Reports';
+import { sectionFromHash, sectionHref } from './lib/navigation';
+import AuthPage from './pages/AuthPage';
+import type { NavSection } from './types';
+
+const AddEntryModal = lazy(() => import('./components/AddEntryModal'));
 
 export default function App() {
-  const { user, role, isManager, loading, signOut, can } = useAuth();
-  const [activeSection, setActiveSection] = useState<NavSection>(isManager ? 'dashboard' : 'daily-view');
+  const { user, role, isManager, loading, authError, signOut, can } = useAuth();
+  const [activeSection, updateActiveSection] = useState<NavSection>(() => sectionFromHash(window.location.hash));
+  const setActiveSection = useCallback((section: NavSection) => {
+    window.location.hash = sectionHref(section);
+    updateActiveSection(section);
+  }, []);
+  useEffect(() => {
+    const onHashChange = () => updateActiveSection(sectionFromHash(window.location.hash));
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<TransactionWithRelations | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [reportTab, setReportTab] = useState<ReportTab>('sales');
   const canAddDailyLedger = can('DAILY_LEDGER_ADD');
-  const canEditDailyLedger = can('DAILY_LEDGER_EDIT');
-  const canDeleteDailyLedger = can('DAILY_LEDGER_DELETE');
   const canUploadDailyLedger = can('DAILY_LEDGER_UPLOAD');
   const canViewSection = useMemo<Record<NavSection, boolean>>(() => ({
     dashboard: can('DASHBOARD_VIEW'),
+    reconciliation: can('RECONCILIATION_VIEW') || isManager,
     'daily-add': canAddDailyLedger,
     'daily-view': can('DAILY_LEDGER_VIEW'),
     'customers-list': can('CUSTOMERS_VIEW') || can('CUSTOMERS_ADD') || can('CUSTOMERS_EDIT') || can('CUSTOMERS_DELETE'),
@@ -53,15 +49,27 @@ export default function App() {
     'operations-sand-washing': can('SW_OPERATIONS_VIEW') || can('SW_OPERATIONS_ADD') || can('SW_OPERATIONS_EDIT') || isManager,
     'operations-quarry-site': can('QS_OPERATIONS_VIEW') || can('QS_OPERATIONS_ADD') || can('QS_OPERATIONS_EDIT') || isManager,
     'operations-wobbler': can('WB_OPERATIONS_VIEW') || can('WB_OPERATIONS_ADD') || can('WB_OPERATIONS_EDIT') || isManager,
+    'workforce-employees': can('WF_EMPLOYEES_VIEW') || can('WF_EMPLOYEES_MANAGE') || isManager,
+    'workforce-attendance': can('WF_ATTENDANCE_VIEW') || can('WF_ATTENDANCE_IMPORT') || can('WF_ATTENDANCE_ADJUST') || isManager,
+    'workforce-payroll': can('WF_PAYROLL_VIEW') || can('WF_PAYROLL_MANAGE') || can('WF_PAYROLL_LOCK') || isManager,
+    'workforce-cash-advances': can('WF_CASH_ADVANCE_VIEW') || can('WF_CASH_ADVANCE_MANAGE') || isManager,
+    'workforce-settings': can('WF_SETTINGS_MANAGE') || isManager,
     reports: can('REPORTS_VIEW'),
     'access-control': can('USER_GROUP_ACCESS_VIEW') || can('USER_GROUP_ACCESS_MANAGE') || can('USER_ACCOUNTS_MANAGE') || can('AUDIT_LOG_VIEW'),
   }), [can, canAddDailyLedger, isManager]);
 
   useEffect(() => {
-    if (loading || canViewSection[activeSection]) return;
+    if (loading || authError) return;
+    if (activeSection === 'daily-add' && canAddDailyLedger) {
+      setShowAddModal(true);
+      setActiveSection('daily-view');
+      return;
+    }
+    if (canViewSection[activeSection]) return;
 
     const fallback = ([
       'dashboard',
+      'reconciliation',
       'daily-view',
       'customers-list',
       'customers-ar',
@@ -76,12 +84,17 @@ export default function App() {
       'operations-quarry-site',
       'operations-wobbler',
       'operations',
+      'workforce-employees',
+      'workforce-attendance',
+      'workforce-payroll',
+      'workforce-cash-advances',
+      'workforce-settings',
       'reports',
       'access-control',
     ] as NavSection[]).find(section => canViewSection[section]);
 
     if (fallback) setActiveSection(fallback);
-  }, [activeSection, canViewSection, loading]);
+  }, [activeSection, authError, canAddDailyLedger, canViewSection, loading, setActiveSection]);
 
   function handleEditTransaction(tx: TransactionWithRelations) {
     setEditingTransaction(tx);
@@ -99,6 +112,18 @@ export default function App() {
         <div className="text-center">
           <div className="w-12 h-12 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin mx-auto mb-3"></div>
           <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center px-6">
+        <div role="alert" className="max-w-md text-center">
+          <p className="text-white font-semibold mb-2">Unable to load Quarry</p>
+          <p className="text-slate-400 text-sm mb-5">{authError}</p>
+          <button onClick={() => window.location.reload()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500">Try again</button>
         </div>
       </div>
     );
@@ -188,60 +213,18 @@ export default function App() {
         <div className="flex-1 overflow-auto">
           <div className="max-w-7xl mx-auto px-6 py-7">
             <ErrorBoundary key={activeSection}>
-            {activeSection === 'dashboard' && (
-              <Dashboard
-                onNavigate={handleNavigate}
-                onOpenProductReport={openProductReport}
-                refreshKey={refreshKey}
-                canManageRecords={canAddDailyLedger}
-              />
-            )}
-            {activeSection === 'daily-view' && (
-              <DailyLedger
-                onAddEntry={() => canAddDailyLedger && setShowAddModal(true)}
-                onEditEntry={handleEditTransaction}
-                refreshKey={refreshKey}
-                canAdd={canAddDailyLedger}
-                canEdit={canEditDailyLedger}
-                canDelete={canDeleteDailyLedger}
-              />
-            )}
-            {activeSection === 'customers-list' && <CustomersList canAdd={can('CUSTOMERS_ADD')} canEdit={can('CUSTOMERS_EDIT')} canDelete={can('CUSTOMERS_DELETE')} />}
-            {activeSection === 'customers-ar' && <AccountsReceivable canEdit={can('ACCOUNTS_RECEIVABLE_EDIT')} />}
-            {activeSection === 'logistics-trucks' && <TruckList canAdd={can('TRUCKS_ADD')} canEdit={can('TRUCKS_EDIT')} canDelete={can('TRUCKS_DELETE')} />}
-            {activeSection === 'logistics-pricing' && <PricingList canAdd={can('PRICING_ADD')} canEdit={can('PRICING_EDIT')} canDelete={can('PRICING_DELETE')} />}
-            {activeSection === 'expenses' && <Expenses canAdd={can('EXPENSES_ADD')} canEdit={can('EXPENSES_EDIT') || isManager} canDelete={can('EXPENSES_DELETE')} />}
-            {activeSection === 'fuel-management' && <FuelManagement canAddPurchase={can('FUEL_PURCHASE_ADD') || isManager} canIssue={can('FUEL_ISSUANCE_ADD') || isManager} canEditPurchase={can('FUEL_PURCHASE_EDIT') || isManager} canEditIssuance={can('FUEL_ISSUANCE_EDIT') || isManager} canAdjust={can('FUEL_ADJUST') || isManager} canExport={can('FUEL_EXPORT') || isManager} canManageEquipment={can('FUEL_EQUIPMENT_MANAGE') || isManager} />}
-            {activeSection === 'hauler-offset-ledger' && <HaulerOffsetLedger canAdd={can('HAULER_OFFSET_LEDGER_ADD') || isManager} canAdjust={can('HAULER_OFFSET_LEDGER_ADJUST') || isManager} canExport={can('HAULER_OFFSET_LEDGER_EXPORT') || isManager} canViewDetail={can('HAULER_OFFSET_LEDGER_VIEW_DETAIL') || isManager} canViewStatement={can('HAULER_STATEMENT_VIEW') || isManager} canExportStatement={can('HAULER_STATEMENT_EXPORT') || isManager} canCustomerCreditAdd={can('CUSTOMER_CREDIT_ADD') || isManager} canCustomerCreditAdjust={can('CUSTOMER_CREDIT_ADJUST') || isManager} canCustomerCreditExport={can('CUSTOMER_CREDIT_EXPORT') || isManager} />}
-            {(activeSection === 'operations' || activeSection === 'operations-dashboard') && (
-              <OperationsDashboard
-                access={{
-                  stoneCrusher: true,
-                  sandWashing: true,
-                  quarrySite: true,
-                  wobbler: true,
-                }}
-                moduleNavigation={{
-                  stoneCrusher: canViewSection['operations-stone-crusher'],
-                  sandWashing: canViewSection['operations-sand-washing'],
-                  quarrySite: canViewSection['operations-quarry-site'],
-                  wobbler: canViewSection['operations-wobbler'],
-                }}
-                canMarkNoOperation={{
-                  stoneCrusher: can('SC_OPERATIONS_ADD') || isManager,
-                  sandWashing: can('SW_OPERATIONS_ADD') || isManager,
-                  quarrySite: can('QS_OPERATIONS_ADD') || isManager,
-                  wobbler: can('WB_OPERATIONS_ADD') || isManager,
-                }}
-                onNavigate={handleNavigate}
-              />
-            )}
-            {activeSection === 'operations-stone-crusher' && <StoneCrusherOperations canAdd={can('SC_OPERATIONS_ADD') || isManager} canEdit={can('SC_OPERATIONS_EDIT') || isManager} canDelete={can('SC_OPERATIONS_DELETE') || isManager} canExport={can('SC_OPERATIONS_EXPORT') || isManager} />}
-            {activeSection === 'operations-sand-washing' && <SandWashingOperations canAdd={can('SW_OPERATIONS_ADD') || isManager} canEdit={can('SW_OPERATIONS_EDIT') || isManager} canDelete={can('SW_OPERATIONS_DELETE') || isManager} canExport={can('SW_OPERATIONS_EXPORT') || isManager} />}
-            {activeSection === 'operations-quarry-site' && <QuarrySiteOperations canAdd={can('QS_OPERATIONS_ADD') || isManager} canEdit={can('QS_OPERATIONS_EDIT') || isManager} canDelete={can('QS_OPERATIONS_DELETE') || isManager} canExport={can('QS_OPERATIONS_EXPORT') || isManager} />}
-            {activeSection === 'operations-wobbler' && <WobblerOperations canAdd={can('WB_OPERATIONS_ADD') || isManager} canEdit={can('WB_OPERATIONS_EDIT') || isManager} canDelete={can('WB_OPERATIONS_DELETE') || isManager} canExport={can('WB_OPERATIONS_EXPORT') || isManager} />}
-            {activeSection === 'reports' && can('REPORTS_VIEW') && <Reports initialTab={reportTab} refreshKey={refreshKey} canEditTransactions={canEditDailyLedger} canExport={can('REPORTS_EXPORT') || isManager} canPrint={can('REPORTS_PRINT') || isManager} onEditTransaction={handleEditTransaction} />}
-            {activeSection === 'access-control' && canViewSection['access-control'] && <AccessControl />}
+              <Suspense fallback={<ModuleLoading />}>
+                <AppSections
+                  activeSection={activeSection}
+                  canViewSection={canViewSection}
+                  reportTab={reportTab}
+                  refreshKey={refreshKey}
+                  onNavigate={handleNavigate}
+                  onOpenProductReport={openProductReport}
+                  onAddEntry={() => canAddDailyLedger && setShowAddModal(true)}
+                  onEditTransaction={handleEditTransaction}
+                />
+              </Suspense>
             </ErrorBoundary>
           </div>
         </div>
@@ -249,12 +232,12 @@ export default function App() {
 
       {showAddModal && (
         <ErrorBoundary area="the entry form">
-        <AddEntryModal
-          onClose={handleModalClose}
-          onSuccess={handleAddSuccess}
-          transaction={editingTransaction ?? undefined}
-          canUploadAttachments={canUploadDailyLedger}
-        />
+          <Suspense fallback={<ModuleLoading overlay />}><AddEntryModal
+            onClose={handleModalClose}
+            onSuccess={handleAddSuccess}
+            transaction={editingTransaction ?? undefined}
+            canUploadAttachments={canUploadDailyLedger}
+          /></Suspense>
         </ErrorBoundary>
       )}
     </div>

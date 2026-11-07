@@ -51,10 +51,10 @@ export function isWithinRange(dateKey: string, start: string, end: string) {
 }
 
 /** State for a quick-preset + custom From/To date filter. */
-export function useDateRange() {
-  const [preset, setPreset] = useState<DatePreset>('ALL');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+export function useDateRange(initialPreset: QuickDatePreset = 'ALL') {
+  const [preset, setPreset] = useState<DatePreset>(initialPreset);
+  const [from, setFrom] = useState(() => presetRange(initialPreset).from);
+  const [to, setTo] = useState(() => presetRange(initialPreset).to);
 
   const applyPreset = useCallback((next: QuickDatePreset) => {
     const range = presetRange(next);

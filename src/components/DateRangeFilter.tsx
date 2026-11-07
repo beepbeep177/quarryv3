@@ -1,7 +1,7 @@
 import { DATE_PRESETS, type DateRangeState } from '../lib/dateRange';
 
 /** Quick date presets plus custom From/To inputs. */
-export default function DateRangeFilter({ range }: { range: DateRangeState }) {
+export default function DateRangeFilter({ range, maxDate }: { range: DateRangeState; maxDate?: string }) {
   const inputClass = 'rounded-lg border bg-white px-3 py-1.5 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400';
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -23,6 +23,7 @@ export default function DateRangeFilter({ range }: { range: DateRangeState }) {
         <input
           type="date"
           value={range.from}
+          max={maxDate}
           onChange={e => range.setCustom('from', e.target.value)}
           aria-label="From date"
           className={`${inputClass} ${range.preset === 'CUSTOM' && range.from ? 'border-emerald-300' : 'border-slate-200'}`}
@@ -31,6 +32,7 @@ export default function DateRangeFilter({ range }: { range: DateRangeState }) {
         <input
           type="date"
           value={range.to}
+          max={maxDate}
           onChange={e => range.setCustom('to', e.target.value)}
           aria-label="To date"
           className={`${inputClass} ${range.preset === 'CUSTOM' && range.to ? 'border-emerald-300' : 'border-slate-200'}`}
